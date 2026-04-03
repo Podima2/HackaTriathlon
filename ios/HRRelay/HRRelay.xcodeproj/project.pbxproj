@@ -1,0 +1,424 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0280563F5B89DC4D75318E78 /* FileSampleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6AD887689994F25CC9063E0 /* FileSampleStore.swift */; };
+		051B3D510E6E2759577CCE00 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29CB2AB229D483028F447B62 /* AppEnvironment.swift */; };
+		249FA001411CEBC807846F62 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD83384684827E705AF72D5 /* DiagnosticsView.swift */; };
+		2F9D042E4D4575186505F2A9 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37D794C177D67BEF0847BD49 /* AppModel.swift */; };
+		4478958BA9539FDB23CE4B12 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F09D3BAB6D700967B3E8AD7 /* Models.swift */; };
+		4E6456BADA0C897EFEF01759 /* UploadWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6949F9B723F03261CBD8CB0C /* UploadWorker.swift */; };
+		60A4EF0C692AB606BA313423 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FF542A330F4B0618565DDAE /* SessionView.swift */; };
+		70871AA9453858ED6454A5A1 /* HRRelayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EF20ACE96F3057CED5E6170 /* HRRelayApp.swift */; };
+		8C5DCB4020287E598EAB8BE7 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2945127BE8BB0B52FFF9D934 /* RootTabView.swift */; };
+		946DFC5005C933346159A540 /* BLEHeartRateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EF297401E5491C3EF4FAE59 /* BLEHeartRateManager.swift */; };
+		AFEF23B0AD263F25A0441568 /* TelemetryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB8B421D21CD2CF61DE2E2C5 /* TelemetryView.swift */; };
+		C020CBC0E580D3CFFE317270 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C68BF1989D65ADAC9223538 /* PairingView.swift */; };
+		C7B34A0AE49745B5A14979F6 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C9177A4E754307F892FE92 /* APIClient.swift */; };
+		D736C33C629A10B85E47B7EF /* FileLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14879A7D7E008A0DE4B96A92 /* FileLogStore.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0C68BF1989D65ADAC9223538 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		0EF297401E5491C3EF4FAE59 /* BLEHeartRateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEHeartRateManager.swift; sourceTree = "<group>"; };
+		0F09D3BAB6D700967B3E8AD7 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		14879A7D7E008A0DE4B96A92 /* FileLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLogStore.swift; sourceTree = "<group>"; };
+		1FD83384684827E705AF72D5 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
+		2945127BE8BB0B52FFF9D934 /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		29CB2AB229D483028F447B62 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
+		35C9177A4E754307F892FE92 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		37D794C177D67BEF0847BD49 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		6949F9B723F03261CBD8CB0C /* UploadWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadWorker.swift; sourceTree = "<group>"; };
+		7EF20ACE96F3057CED5E6170 /* HRRelayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HRRelayApp.swift; sourceTree = "<group>"; };
+		8FF542A330F4B0618565DDAE /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
+		AB8B421D21CD2CF61DE2E2C5 /* TelemetryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryView.swift; sourceTree = "<group>"; };
+		D6AD887689994F25CC9063E0 /* FileSampleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSampleStore.swift; sourceTree = "<group>"; };
+		D890006FDA065F6029F5CCEE /* HRRelay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HRRelay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		008667EDA7C97C828D86B839 /* Pairing */ = {
+			isa = PBXGroup;
+			children = (
+				0C68BF1989D65ADAC9223538 /* PairingView.swift */,
+			);
+			path = Pairing;
+			sourceTree = "<group>";
+		};
+		058D02B6CFD4883CB4FBB399 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				29CB2AB229D483028F447B62 /* AppEnvironment.swift */,
+				37D794C177D67BEF0847BD49 /* AppModel.swift */,
+				7EF20ACE96F3057CED5E6170 /* HRRelayApp.swift */,
+				2945127BE8BB0B52FFF9D934 /* RootTabView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		217C1FF3B9C724134B511716 /* Session */ = {
+			isa = PBXGroup;
+			children = (
+				8FF542A330F4B0618565DDAE /* SessionView.swift */,
+			);
+			path = Session;
+			sourceTree = "<group>";
+		};
+		21A69BD26F69F47A805BE1A3 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				6A62178EA979023F35729EC7 /* Diagnostics */,
+				008667EDA7C97C828D86B839 /* Pairing */,
+				217C1FF3B9C724134B511716 /* Session */,
+				BFE97E46D268708556F67643 /* Telemetry */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		2A1083ED793B838D0BAF830C /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				14879A7D7E008A0DE4B96A92 /* FileLogStore.swift */,
+				D6AD887689994F25CC9063E0 /* FileSampleStore.swift */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+		3FE230D1DF343B3DA3BAA3CC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D890006FDA065F6029F5CCEE /* HRRelay.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		53DA8549C0202F38574BAF2E /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				0F09D3BAB6D700967B3E8AD7 /* Models.swift */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		6A62178EA979023F35729EC7 /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				1FD83384684827E705AF72D5 /* DiagnosticsView.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
+		73D34758C2A2FB3519DD794A = {
+			isa = PBXGroup;
+			children = (
+				CDC996FD72CC03E4FE6B57CB /* Sources */,
+				3FE230D1DF343B3DA3BAA3CC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9749C06B8C502AA1D18B4867 /* BLE */ = {
+			isa = PBXGroup;
+			children = (
+				0EF297401E5491C3EF4FAE59 /* BLEHeartRateManager.swift */,
+			);
+			path = BLE;
+			sourceTree = "<group>";
+		};
+		AC0CB33364FC490A2F291370 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				35C9177A4E754307F892FE92 /* APIClient.swift */,
+				6949F9B723F03261CBD8CB0C /* UploadWorker.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		BFE97E46D268708556F67643 /* Telemetry */ = {
+			isa = PBXGroup;
+			children = (
+				AB8B421D21CD2CF61DE2E2C5 /* TelemetryView.swift */,
+			);
+			path = Telemetry;
+			sourceTree = "<group>";
+		};
+		CDC996FD72CC03E4FE6B57CB /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				058D02B6CFD4883CB4FBB399 /* App */,
+				9749C06B8C502AA1D18B4867 /* BLE */,
+				2A1083ED793B838D0BAF830C /* Data */,
+				53DA8549C0202F38574BAF2E /* Domain */,
+				21A69BD26F69F47A805BE1A3 /* Features */,
+				AC0CB33364FC490A2F291370 /* Networking */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		62440E3345516C3F6BF46D78 /* HRRelay */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 26C5CC247CF972481451103B /* Build configuration list for PBXNativeTarget "HRRelay" */;
+			buildPhases = (
+				8966117E7D089F37F432311E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = HRRelay;
+			packageProductDependencies = (
+			);
+			productName = HRRelay;
+			productReference = D890006FDA065F6029F5CCEE /* HRRelay.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		3F37AC8E7F4A9338B8C8197C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2620;
+			};
+			buildConfigurationList = DA8643B2ADAEB4E2211CE525 /* Build configuration list for PBXProject "HRRelay" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 73D34758C2A2FB3519DD794A;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 3FE230D1DF343B3DA3BAA3CC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				62440E3345516C3F6BF46D78 /* HRRelay */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8966117E7D089F37F432311E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C7B34A0AE49745B5A14979F6 /* APIClient.swift in Sources */,
+				051B3D510E6E2759577CCE00 /* AppEnvironment.swift in Sources */,
+				2F9D042E4D4575186505F2A9 /* AppModel.swift in Sources */,
+				946DFC5005C933346159A540 /* BLEHeartRateManager.swift in Sources */,
+				249FA001411CEBC807846F62 /* DiagnosticsView.swift in Sources */,
+				D736C33C629A10B85E47B7EF /* FileLogStore.swift in Sources */,
+				0280563F5B89DC4D75318E78 /* FileSampleStore.swift in Sources */,
+				70871AA9453858ED6454A5A1 /* HRRelayApp.swift in Sources */,
+				4478958BA9539FDB23CE4B12 /* Models.swift in Sources */,
+				C020CBC0E580D3CFFE317270 /* PairingView.swift in Sources */,
+				8C5DCB4020287E598EAB8BE7 /* RootTabView.swift in Sources */,
+				60A4EF0C692AB606BA313423 /* SessionView.swift in Sources */,
+				AFEF23B0AD263F25A0441568 /* TelemetryView.swift in Sources */,
+				4E6456BADA0C897EFEF01759 /* UploadWorker.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		167A6861ADFFAC1427801D23 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 5367Z8HMU8;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = HRRelay;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.1;
+			};
+			name = Release;
+		};
+		1A53C0E059ACC2F883C69898 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/HRRelay.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.precannes.hrrelay;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6011B1ED2C98ECE8CB6EBD9B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/HRRelay.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.precannes.hrrelay;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		607589F3783647B0B70295B6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 5367Z8HMU8;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = HRRelay;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		26C5CC247CF972481451103B /* Build configuration list for PBXNativeTarget "HRRelay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6011B1ED2C98ECE8CB6EBD9B /* Debug */,
+				1A53C0E059ACC2F883C69898 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DA8643B2ADAEB4E2211CE525 /* Build configuration list for PBXProject "HRRelay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				607589F3783647B0B70295B6 /* Debug */,
+				167A6861ADFFAC1427801D23 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 3F37AC8E7F4A9338B8C8197C /* Project object */;
+}
