@@ -10,8 +10,13 @@ struct DiagnosticsView: View {
                 Section("Live State") {
                     row("Strap", appModel.diagnostics.strapName ?? "Not connected")
                     row("BLE Status", appModel.diagnostics.connectionStatus.rawValue.capitalized)
+                    row("Motion", appModel.diagnostics.motionStatus)
                     row("Backend", appModel.diagnostics.backendBaseURL ?? "Unknown")
+                    row("Upload State", appModel.diagnostics.uploadState)
+                    row("Upload Session", appModel.diagnostics.lastUploadSessionId ?? "N/A")
+                    row("Last Upload", appModel.diagnostics.lastUploadAt?.formatted(date: .numeric, time: .standard) ?? "N/A")
                     row("Current BPM", appModel.diagnostics.currentBPM.map(String.init) ?? "N/A")
+                    row("Current Steps", appModel.diagnostics.currentSteps.map(String.init) ?? "N/A")
                     row("Pending Samples", "\(appModel.diagnostics.pendingSamples)")
                     row("Last Acked Seq", appModel.diagnostics.lastAckedSequence.map(String.init) ?? "N/A")
                     row("Active Session", appModel.diagnostics.activeSessionId ?? "None")

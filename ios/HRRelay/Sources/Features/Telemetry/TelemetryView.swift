@@ -20,9 +20,11 @@ struct TelemetryView: View {
 
                 VStack(spacing: 12) {
                     statusRow("BLE", appModel.connectionStatus.rawValue.capitalized)
+                    statusRow("Motion", appModel.diagnostics.motionStatus)
                     statusRow("Last Sample Local", lastSampleLocal)
                     statusRow("Last Sample UTC", lastSampleUTC)
                     statusRow("Sequence", sequenceText)
+                    statusRow("Steps", currentSteps)
                     statusRow("Session", appModel.activeSession?.sessionId ?? "No active session")
                     statusRow("Timezone", appModel.activeSession?.eventTimezone ?? TimeZone.current.identifier)
                     statusRow("Pending Queue", "\(appModel.diagnostics.pendingSamples)")
@@ -62,6 +64,13 @@ struct TelemetryView: View {
     private var sequenceText: String {
         guard let reading = appModel.latestReading else { return "N/A" }
         return String(reading.sampleSeq)
+    }
+
+    private var currentSteps: String {
+        if let steps = appModel.diagnostics.currentSteps {
+            return String(steps)
+        }
+        return "N/A"
     }
 
     private var lastAckedText: String {

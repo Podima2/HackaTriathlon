@@ -144,7 +144,7 @@ It is still MVP-grade code and needs hardening before real deployment.
 ## Polygon Amoy Deployment Inputs
 
 - Network: `Polygon Amoy`
-- RPC: `https://rpc-amoy.polygon.technology/`
+- RPC: `https://sepolia.base.org`
 - Mock collateral token: `HACKTRI`
 - Settlement operator:
   `0x449CCED8EC3a7bf4ec6E763d55c1857a3f63239d`

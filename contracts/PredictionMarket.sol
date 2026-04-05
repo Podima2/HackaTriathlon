@@ -6,7 +6,7 @@ interface IERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
-/// @notice MVP contract focused on binary threshold heart-rate markets.
+/// @notice MVP contract focused on binary threshold markets over live telemetry signals.
 /// Numeric markets should remain offchain until a discrete payout model is chosen.
 contract PredictionMarket {
     enum ThresholdDirection {
@@ -28,12 +28,13 @@ contract PredictionMarket {
         address creator;
         uint64 t;
         uint64 tradingClosesAtElapsedMs;
-        uint32 thresholdBpm;
+        uint64 thresholdValue;
         ThresholdDirection thresholdDirection;
+        uint8 signalType;
         uint64 createdAt;
         MarketStatus status;
         bool settledBooleanOutcome;
-        int256 observedBpm;
+        int256 observedValue;
         uint64 settledSampleElapsedMs;
         uint32 settledSampleSeq;
         uint256 yesPool;
@@ -65,8 +66,9 @@ contract PredictionMarket {
         address indexed creator,
         uint64 t,
         uint64 tradingClosesAtElapsedMs,
-        uint32 thresholdBpm,
+        uint64 thresholdValue,
         ThresholdDirection thresholdDirection,
+        uint8 signalType,
         uint256 seedLiquidity
     );
     event LiquidityAdded(uint256 indexed marketId, address indexed provider, uint256 amount, uint256 yesPool, uint256 noPool);
@@ -84,7 +86,8 @@ contract PredictionMarket {
     event MarketSettled(
         uint256 indexed marketId,
         bool booleanOutcome,
-        int256 observedBpm,
+        int256 observedValue,
+        uint8 signalType,
         uint32 sampleSeq,
         uint64 sampleElapsedMs
     );
@@ -110,12 +113,13 @@ contract PredictionMarket {
         bytes32 sessionIdHash,
         uint64 t,
         uint64 tradingClosesAtElapsedMs,
-        uint32 thresholdBpm,
+        uint64 thresholdValue,
         ThresholdDirection thresholdDirection,
+        uint8 signalType,
         uint256 seedLiquidity
     ) external returns (uint256 marketId) {
         if (t == 0 || tradingClosesAtElapsedMs > t) revert InvalidMarketTimes();
-        if (thresholdBpm == 0 || seedLiquidity == 0) revert InvalidMarketParameters();
+        if (thresholdValue == 0 || seedLiquidity == 0) revert InvalidMarketParameters();
         _pullCollateral(msg.sender, seedLiquidity);
 
         marketId = nextMarketId++;
@@ -128,12 +132,13 @@ contract PredictionMarket {
             creator: msg.sender,
             t: t,
             tradingClosesAtElapsedMs: tradingClosesAtElapsedMs,
-            thresholdBpm: thresholdBpm,
+            thresholdValue: thresholdValue,
             thresholdDirection: thresholdDirection,
+            signalType: signalType,
             createdAt: uint64(block.timestamp),
             status: MarketStatus.Open,
             settledBooleanOutcome: false,
-            observedBpm: 0,
+            observedValue: 0,
             settledSampleElapsedMs: 0,
             settledSampleSeq: 0,
             yesPool: balancedPool,
@@ -147,8 +152,9 @@ contract PredictionMarket {
             msg.sender,
             t,
             tradingClosesAtElapsedMs,
-            thresholdBpm,
+            thresholdValue,
             thresholdDirection,
+            signalType,
             seedLiquidity
         );
     }
@@ -225,7 +231,7 @@ contract PredictionMarket {
     function fulfillSettlement(
         uint256 marketId,
         bool booleanOutcome,
-        int256 observedBpm,
+        int256 observedValue,
         uint32 sampleSeq,
         uint64 sampleElapsedMs
     ) external {
@@ -233,15 +239,15 @@ contract PredictionMarket {
         Market storage market = markets[marketId];
         if (market.status == MarketStatus.Settled) revert MarketAlreadySettled();
         if (market.status != MarketStatus.SettlementRequested) revert MarketNotSettlementReady();
-        if (observedBpm <= 0) revert InvalidSettlementPayload();
+        if (observedValue <= 0) revert InvalidSettlementPayload();
 
         market.status = MarketStatus.Settled;
         market.settledBooleanOutcome = booleanOutcome;
-        market.observedBpm = observedBpm;
+        market.observedValue = observedValue;
         market.settledSampleSeq = sampleSeq;
         market.settledSampleElapsedMs = sampleElapsedMs;
 
-        emit MarketSettled(marketId, booleanOutcome, observedBpm, sampleSeq, sampleElapsedMs);
+        emit MarketSettled(marketId, booleanOutcome, observedValue, market.signalType, sampleSeq, sampleElapsedMs);
     }
 
     function claim(uint256 marketId) external returns (uint256 payoutAmount) {
@@ -277,16 +283,18 @@ contract PredictionMarket {
         returns (
             bytes32 sessionIdHash,
             uint64 t,
-            uint32 thresholdBpm,
-            ThresholdDirection thresholdDirection
+            uint64 thresholdValue,
+            ThresholdDirection thresholdDirection,
+            uint8 signalType
         )
     {
         Market storage market = markets[marketId];
         return (
             market.sessionIdHash,
             market.t,
-            market.thresholdBpm,
-            market.thresholdDirection
+            market.thresholdValue,
+            market.thresholdDirection,
+            market.signalType
         );
     }
 

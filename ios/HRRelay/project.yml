@@ -20,8 +20,11 @@ targets:
       properties:
         UILaunchScreen: {}
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
+        UIApplicationSupportsMultipleScenes: false
+        HRRelayAPIBaseURL: https://hackatriathlon-production.up.railway.app/api/telemetry
+        HRRelayAPIKey: hacktri
         NSBluetoothAlwaysUsageDescription: HR Relay reads your heart rate belt and forwards event telemetry to your backend.
+        NSMotionUsageDescription: HR Relay reads step count from your iPhone so motion telemetry can be settled alongside heart-rate markets.
         UIBackgroundModes:
           - bluetooth-central
           - processing

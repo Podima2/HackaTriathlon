@@ -12,6 +12,7 @@
 		249FA001411CEBC807846F62 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD83384684827E705AF72D5 /* DiagnosticsView.swift */; };
 		2F9D042E4D4575186505F2A9 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37D794C177D67BEF0847BD49 /* AppModel.swift */; };
 		4478958BA9539FDB23CE4B12 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F09D3BAB6D700967B3E8AD7 /* Models.swift */; };
+		471E4FAF49A22D2F0A14FCF3 /* MotionTelemetryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 171F3476AC018427BACE072B /* MotionTelemetryManager.swift */; };
 		4E6456BADA0C897EFEF01759 /* UploadWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6949F9B723F03261CBD8CB0C /* UploadWorker.swift */; };
 		60A4EF0C692AB606BA313423 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FF542A330F4B0618565DDAE /* SessionView.swift */; };
 		70871AA9453858ED6454A5A1 /* HRRelayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EF20ACE96F3057CED5E6170 /* HRRelayApp.swift */; };
@@ -28,6 +29,7 @@
 		0EF297401E5491C3EF4FAE59 /* BLEHeartRateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEHeartRateManager.swift; sourceTree = "<group>"; };
 		0F09D3BAB6D700967B3E8AD7 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		14879A7D7E008A0DE4B96A92 /* FileLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLogStore.swift; sourceTree = "<group>"; };
+		171F3476AC018427BACE072B /* MotionTelemetryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionTelemetryManager.swift; sourceTree = "<group>"; };
 		1FD83384684827E705AF72D5 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		2945127BE8BB0B52FFF9D934 /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
 		29CB2AB229D483028F447B62 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -97,6 +99,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		4F11EFA99034ECAAB8BF6199 /* Motion */ = {
+			isa = PBXGroup;
+			children = (
+				171F3476AC018427BACE072B /* MotionTelemetryManager.swift */,
+			);
+			path = Motion;
+			sourceTree = "<group>";
+		};
 		53DA8549C0202F38574BAF2E /* Domain */ = {
 			isa = PBXGroup;
 			children = (
@@ -154,6 +164,7 @@
 				2A1083ED793B838D0BAF830C /* Data */,
 				53DA8549C0202F38574BAF2E /* Domain */,
 				21A69BD26F69F47A805BE1A3 /* Features */,
+				4F11EFA99034ECAAB8BF6199 /* Motion */,
 				AC0CB33364FC490A2F291370 /* Networking */,
 			);
 			path = Sources;
@@ -186,7 +197,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 1430;
 			};
 			buildConfigurationList = DA8643B2ADAEB4E2211CE525 /* Build configuration list for PBXProject "HRRelay" */;
 			developmentRegion = en;
@@ -221,6 +232,7 @@
 				0280563F5B89DC4D75318E78 /* FileSampleStore.swift in Sources */,
 				70871AA9453858ED6454A5A1 /* HRRelayApp.swift in Sources */,
 				4478958BA9539FDB23CE4B12 /* Models.swift in Sources */,
+				471E4FAF49A22D2F0A14FCF3 /* MotionTelemetryManager.swift in Sources */,
 				C020CBC0E580D3CFFE317270 /* PairingView.swift in Sources */,
 				8C5DCB4020287E598EAB8BE7 /* RootTabView.swift in Sources */,
 				60A4EF0C692AB606BA313423 /* SessionView.swift in Sources */,
@@ -268,10 +280,8 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 5367Z8HMU8;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -286,7 +296,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = HRRelay;
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.1;
@@ -299,6 +308,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/HRRelay.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 5367Z8HMU8;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -317,6 +327,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/HRRelay.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 5367Z8HMU8;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -365,10 +376,8 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 5367Z8HMU8;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -390,7 +399,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = HRRelay;
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.1;

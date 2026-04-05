@@ -20,7 +20,36 @@ enum BLEConnectionStatus: String {
 struct HeartRateReading: Codable, Equatable {
     let sampleSeq: Int
     let bpm: Int
+    let rrIntervalsMs: [Double]?
+    let rmssd: Double?
+    let sdnn: Double?
     let deviceObservedAt: Date?
+    let phoneObservedAt: Date
+    let steps: Int?
+
+    init(
+        sampleSeq: Int,
+        bpm: Int,
+        rrIntervalsMs: [Double]?,
+        rmssd: Double?,
+        sdnn: Double?,
+        deviceObservedAt: Date?,
+        phoneObservedAt: Date,
+        steps: Int? = nil
+    ) {
+        self.sampleSeq = sampleSeq
+        self.bpm = bpm
+        self.rrIntervalsMs = rrIntervalsMs
+        self.rmssd = rmssd
+        self.sdnn = sdnn
+        self.deviceObservedAt = deviceObservedAt
+        self.phoneObservedAt = phoneObservedAt
+        self.steps = steps
+    }
+}
+
+struct MotionTelemetryReading: Codable, Equatable {
+    let steps: Int
     let phoneObservedAt: Date
 }
 
@@ -50,21 +79,30 @@ struct QueuedSample: Codable, Equatable, Identifiable {
     let sessionId: String
     let sampleSeq: Int
     let bpm: Int
+    let rrIntervalsMs: [Double]?
+    let rmssd: Double?
+    let sdnn: Double?
     let deviceObservedAt: Date?
     let phoneObservedAt: Date
+    let steps: Int?
     let elapsedMsSinceSessionStart: Int
     var acked: Bool
 }
 
 struct SampleBatchPayload: Codable {
+    let sessionId: String?
     let samples: [SamplePayload]
 }
 
 struct SamplePayload: Codable {
     let sampleSeq: Int
     let bpm: Int
+    let rrIntervalsMs: [Double]?
+    let rmssd: Double?
+    let sdnn: Double?
     let deviceObservedAt: Date?
     let phoneObservedAt: Date
+    let steps: Int?
     let elapsedMsSinceSessionStart: Int
 }
 
@@ -82,13 +120,18 @@ struct SessionStatusResponse: Codable {
 struct DiagnosticsSnapshot {
     var strapName: String?
     var connectionStatus: BLEConnectionStatus = .idle
+    var motionStatus: String = "Idle"
     var currentBPM: Int?
+    var currentSteps: Int?
     var pendingSamples: Int = 0
     var lastAckedSequence: Int?
     var activeSessionId: String?
     var lastSampleAt: Date?
     var lastError: String?
     var backendBaseURL: String?
+    var uploadState: String = "Idle"
+    var lastUploadAt: Date?
+    var lastUploadSessionId: String?
 
     static let empty = DiagnosticsSnapshot()
 }

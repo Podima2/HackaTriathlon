@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+.env.*
+.DS_Store
+.vercel
+broadcast/
+cache/
+out/
+data/
+*.tsbuildinfo
+ios/HRRelay/HRRelay.xcodeproj/project.xcworkspace/xcuserdata/
+ios/HRRelay/HRRelay.xcodeproj/xcuserdata/
+ios/HRRelay/HRRelay.xcodeproj/HRRelay.xcodeproj/
+cre-workflows/secrets.yaml
+cre-workflows/snapshot-publisher/.cre_build_tmp.js
+cre-workflows/snapshot-publisher/binary.wasm

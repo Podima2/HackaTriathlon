@@ -11,3 +11,5 @@ via_ir = true
 
 [rpc_endpoints]
 polygon_amoy = "https://rpc-amoy.polygon.technology/"
+base_sepolia = "https://sepolia.base.org"
+arc_testnet = "https://rpc.testnet.arc.network"

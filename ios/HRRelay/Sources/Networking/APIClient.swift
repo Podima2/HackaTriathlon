@@ -10,6 +10,13 @@ protocol APIClient: Sendable {
 struct LiveAPIClient: APIClient {
     let baseURL: URL
     let apiKey: String?
+    private static let urlSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 60
+        return URLSession(configuration: configuration)
+    }()
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -43,13 +50,17 @@ struct LiveAPIClient: APIClient {
     }
 
     func uploadSamples(sessionId: String, samples: [QueuedSample]) async throws -> SampleBatchAck {
-        var request = makeRequest(path: "sessions/\(sessionId)/samples", method: "POST")
-        let payload = SampleBatchPayload(samples: samples.map {
+        var request = makeRequest(path: "upload", method: "POST")
+        let payload = SampleBatchPayload(sessionId: sessionId, samples: samples.map {
             SamplePayload(
                 sampleSeq: $0.sampleSeq,
                 bpm: $0.bpm,
+                rrIntervalsMs: $0.rrIntervalsMs,
+                rmssd: $0.rmssd,
+                sdnn: $0.sdnn,
                 deviceObservedAt: $0.deviceObservedAt,
                 phoneObservedAt: $0.phoneObservedAt,
+                steps: $0.steps,
                 elapsedMsSinceSessionStart: $0.elapsedMsSinceSessionStart
             )
         })
@@ -73,7 +84,7 @@ struct LiveAPIClient: APIClient {
     private func makeRequest(path: String, method: String) -> URLRequest {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
-        request.timeoutInterval = 8
+        request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let apiKey {
             request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
@@ -82,7 +93,7 @@ struct LiveAPIClient: APIClient {
     }
 
     private func send(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await Self.urlSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIClientError.invalidResponse
         }

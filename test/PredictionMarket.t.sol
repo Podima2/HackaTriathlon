@@ -40,6 +40,7 @@ contract PredictionMarketTest is Test {
             100_000,
             170,
             PredictionMarket.ThresholdDirection.Over,
+            0,
             1_000 ether
         );
 

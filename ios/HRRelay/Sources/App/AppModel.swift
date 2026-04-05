@@ -6,6 +6,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var discoveredDevices: [BLEDevice] = []
     @Published private(set) var connectionStatus: BLEConnectionStatus = .idle
     @Published private(set) var latestReading: HeartRateReading?
+    @Published private(set) var latestMotionReading: MotionTelemetryReading?
     @Published private(set) var activeSession: SessionRecord?
     @Published private(set) var diagnostics = DiagnosticsSnapshot.empty
     @Published private(set) var isStartingSession = false
@@ -16,6 +17,7 @@ final class AppModel: ObservableObject {
     @Published var notes = ""
 
     let bleManager: BLEHeartRateManager
+    let motionManager: MotionTelemetryManager
     let sampleStore: FileSampleStore
     let logStore: FileLogStore
     let environment: AppEnvironment
@@ -26,7 +28,19 @@ final class AppModel: ObservableObject {
         self.sampleStore = sampleStore
         self.logStore = logStore
         self.bleManager = BLEHeartRateManager()
+        self.motionManager = MotionTelemetryManager()
         self.uploadWorker = UploadWorker(apiClient: environment.apiClient, sampleStore: sampleStore, logStore: logStore)
+        self.uploadWorker.onStatusChange = { [weak self] state, sessionId, timestamp, error in
+            guard let self else { return }
+            await MainActor.run {
+                self.diagnostics.uploadState = state
+                self.diagnostics.lastUploadSessionId = sessionId ?? self.diagnostics.lastUploadSessionId
+                self.diagnostics.lastUploadAt = timestamp ?? self.diagnostics.lastUploadAt
+                if let error {
+                    self.diagnostics.lastError = error
+                }
+            }
+        }
     }
 
     func bootstrap() async {
@@ -34,7 +48,11 @@ final class AppModel: ObservableObject {
         activeSession = await sampleStore.activeSession()
         diagnostics.pendingSamples = await sampleStore.pendingSampleCount()
         bindBLECallbacks()
+        if let activeSession {
+            startMotionTracking(for: activeSession)
+        }
         uploadWorker.start()
+        uploadWorker.wake()
         await refreshDiagnostics()
     }
 
@@ -72,6 +90,8 @@ final class AppModel: ObservableObject {
             let session = try await environment.apiClient.createSession(draft: draft)
             await sampleStore.activateSession(session)
             activeSession = session
+            startMotionTracking(for: session)
+            uploadWorker.wake()
             await logStore.append("Started session \(session.sessionId)")
             sessionFeedback = "Session started"
             await refreshDiagnostics()
@@ -93,6 +113,8 @@ final class AppModel: ObservableObject {
         do {
             try await environment.apiClient.finalizeSession(sessionId: session.sessionId)
             await sampleStore.finalizeSession(sessionId: session.sessionId)
+            motionManager.stop()
+            latestMotionReading = nil
             activeSession = nil
             await logStore.append("Finalized session \(session.sessionId)")
             sessionFeedback = "Session ended"
@@ -113,14 +135,21 @@ final class AppModel: ObservableObject {
 
     func refreshDiagnostics() async {
         var snapshot = diagnostics
-        snapshot.pendingSamples = await sampleStore.pendingSampleCount()
+        let activeSession = await sampleStore.activeSession()
+        snapshot.pendingSamples = if let sessionId = activeSession?.sessionId {
+            await sampleStore.pendingSampleCount(sessionId: sessionId)
+        } else {
+            await sampleStore.pendingSampleCount()
+        }
         snapshot.lastAckedSequence = await sampleStore.latestAckedSequence()
-        snapshot.activeSessionId = await sampleStore.activeSession()?.sessionId
+        snapshot.activeSessionId = activeSession?.sessionId
         snapshot.strapName = bleManager.connectedDeviceName
         snapshot.connectionStatus = connectionStatus
         snapshot.currentBPM = latestReading?.bpm
+        snapshot.currentSteps = latestMotionReading?.steps ?? latestReading?.steps
         snapshot.lastSampleAt = latestReading?.phoneObservedAt
         snapshot.backendBaseURL = environment.backendBaseURL
+        snapshot.motionStatus = motionManager.status
         diagnostics = snapshot
     }
 
@@ -141,11 +170,27 @@ final class AppModel: ObservableObject {
         bleManager.onReading = { [weak self] reading in
             guard let self else { return }
             Task {
-                await self.sampleStore.append(reading: reading)
-                await self.logStore.append("HR sample seq=\(reading.sampleSeq) bpm=\(reading.bpm)")
-                await MainActor.run {
-                    self.latestReading = reading
+                let enrichedReading = await MainActor.run {
+                    self.enriched(reading: reading)
                 }
+                await self.sampleStore.append(reading: enrichedReading)
+                let rrCount = reading.rrIntervalsMs?.count ?? 0
+                let rmssd = reading.rmssd.map { " rmssd=\($0)" } ?? ""
+                let sdnn = reading.sdnn.map { " sdnn=\($0)" } ?? ""
+                let steps = enrichedReading.steps.map { " steps=\($0)" } ?? ""
+                await self.logStore.append("HR sample seq=\(reading.sampleSeq) bpm=\(reading.bpm)\(steps) rrCount=\(rrCount)\(rmssd)\(sdnn)")
+                await MainActor.run {
+                    self.latestReading = enrichedReading
+                }
+                self.uploadWorker.wake()
+                await self.refreshDiagnostics()
+            }
+        }
+
+        motionManager.onUpdate = { [weak self] reading in
+            guard let self else { return }
+            Task { @MainActor in
+                self.latestMotionReading = reading
                 await self.refreshDiagnostics()
             }
         }
@@ -155,6 +200,30 @@ final class AppModel: ObservableObject {
                 await self?.logStore.append(line)
             }
         }
+
+        motionManager.onLog = { [weak self] line in
+            Task {
+                await self?.logStore.append(line)
+            }
+        }
+    }
+
+    private func startMotionTracking(for session: SessionRecord) {
+        let sessionStart = session.clientStartedAt ?? session.createdAt
+        motionManager.start(from: sessionStart)
+    }
+
+    private func enriched(reading: HeartRateReading) -> HeartRateReading {
+        HeartRateReading(
+            sampleSeq: reading.sampleSeq,
+            bpm: reading.bpm,
+            rrIntervalsMs: reading.rrIntervalsMs,
+            rmssd: reading.rmssd,
+            sdnn: reading.sdnn,
+            deviceObservedAt: reading.deviceObservedAt,
+            phoneObservedAt: reading.phoneObservedAt,
+            steps: latestMotionReading?.steps
+        )
     }
 }
 

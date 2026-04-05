@@ -1,0 +1,8 @@
+{
+  "schedule": "*/15 * * * * *",
+  "snapshotUrl": "https://hackatriathlon-production.up.railway.app/api/cre/sessions/current/latest-snapshot?bucketMs=5000&staleAfterMs=10000",
+  "chainSelectorName": "arc-testnet",
+  "consumerAddress": "0xD05247c2cBE8f38f90ebd85AcECdFF9cce7d16F1",
+  "gasLimit": "500000",
+  "allowStale": true
+}

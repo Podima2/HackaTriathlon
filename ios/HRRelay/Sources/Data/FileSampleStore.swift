@@ -61,8 +61,12 @@ actor FileSampleStore {
             sessionId: currentSession.sessionId,
             sampleSeq: reading.sampleSeq,
             bpm: reading.bpm,
+            rrIntervalsMs: reading.rrIntervalsMs,
+            rmssd: reading.rmssd,
+            sdnn: reading.sdnn,
             deviceObservedAt: reading.deviceObservedAt,
             phoneObservedAt: reading.phoneObservedAt,
+            steps: reading.steps,
             elapsedMsSinceSessionStart: elapsedMs,
             acked: false
         ))
@@ -70,8 +74,8 @@ actor FileSampleStore {
         await persistQueue()
     }
 
-    func pendingSamples(limit: Int) async -> [QueuedSample] {
-        Array(queue.filter { !$0.acked }.prefix(limit))
+    func pendingSamples(sessionId: String, limit: Int) async -> [QueuedSample] {
+        Array(queue.filter { !$0.acked && $0.sessionId == sessionId }.prefix(limit))
     }
 
     func markAcknowledged(sessionId: String, through sequence: Int) async {
@@ -87,6 +91,10 @@ actor FileSampleStore {
 
     func pendingSampleCount() async -> Int {
         queue.filter { !$0.acked }.count
+    }
+
+    func pendingSampleCount(sessionId: String) async -> Int {
+        queue.filter { !$0.acked && $0.sessionId == sessionId }.count
     }
 
     func latestAckedSequence() async -> Int? {

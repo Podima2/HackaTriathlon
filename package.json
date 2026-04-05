@@ -1,0 +1,35 @@
+{
+  "name": "precannes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:lan": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "start": "tsx src/server/index.ts",
+    "server:dev": "tsx watch src/server/index.ts",
+    "server:start": "tsx src/server/index.ts",
+    "serve:single": "npm run build && npm run server:start",
+    "cre:publish-snapshot": "node scripts/publish-latest-snapshot.mjs",
+    "cre:publish-interval-close": "node scripts/publish-interval-close.mjs",
+    "cre:settle-threshold": "node scripts/settle-threshold-market.mjs",
+    "cre:runner": "node scripts/cre-runner.mjs",
+    "cre:autopilot": "node scripts/cre-autopilot.mjs",
+    "cre:proof": "node scripts/cre-proof.mjs",
+    "test:tunnel": "node scripts/tunnel-test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@snap/camera-kit": "^1.15.0",
+    "viem": "^2.47.10",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
+  }
+}
