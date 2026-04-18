@@ -938,6 +938,7 @@ async function enterAuthenticatedExperience() {
 }
 
 async function hydrateAuthenticatedExperience() {
+  void fetchServerConfig();
   await refreshFaucet();
   await refreshWalletState();
   await hydrateCurrentSessionFast();
@@ -987,7 +988,7 @@ function renderUserShell() {
     <div class="app-shell">
       <header class="topbar mobile-top" data-reveal="topbar" data-reveal-order="0">
         <div class="hero-copy">
-          <button id="lang-toggle" class="lang-toggle" type="button" aria-label="Switch language">${currentLang === "en" ? "ES" : "EN"}</button>
+          <button id="lang-toggle" class="lang-toggle" type="button" aria-label="Switch language">${currentLang === "en" ? "EN" : "ES"}</button>
           <h1>THE HACKATRIATHLON</h1>
         </div>
         <div class="topbar-meta">
@@ -1869,7 +1870,7 @@ function bindStaticHandlers() {
     currentLang = currentLang === "en" ? "es" : "en";
     localStorage.setItem(LANG_STORAGE_KEY, currentLang);
     const btn = document.getElementById("lang-toggle");
-    if (btn) btn.textContent = currentLang === "en" ? "ES" : "EN";
+    if (btn) btn.textContent = currentLang === "en" ? "EN" : "ES";
     translatePage();
   });
   document.addEventListener("pointerdown", (event) => {
@@ -4816,7 +4817,7 @@ function getWalletClient() {
   });
 }
 
-function saveYoutubeUrl() {
+async function saveYoutubeUrl() {
   const value = readInputValue("youtube-url");
   if (!value) {
     setStatus("Enter a YouTube embed URL", "warning");
@@ -4825,7 +4826,29 @@ function saveYoutubeUrl() {
   state.youtubeUrl = value;
   localStorage.setItem(YOUTUBE_STORAGE_KEY, value);
   renderBroadcastMedia();
+  try {
+    const adminToken = getAdminApiToken();
+    if (adminToken) {
+      await fetch(apiUrl("/api/admin/config"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": adminToken },
+        body: JSON.stringify({ youtubeUrl: value }),
+      });
+    }
+  } catch {}
   setStatus("Updated broadcast embed.", "success");
+}
+
+async function fetchServerConfig() {
+  try {
+    const res = await fetch(apiUrl("/api/config"));
+    const data = (await res.json()) as { ok: boolean; youtubeUrl: string };
+    if (data.ok && data.youtubeUrl && !data.youtubeUrl.includes("YOUR_CHANNEL_ID")) {
+      state.youtubeUrl = data.youtubeUrl;
+      localStorage.setItem(YOUTUBE_STORAGE_KEY, data.youtubeUrl);
+      renderBroadcastMedia();
+    }
+  } catch {}
 }
 
 function bindClick(id: string, handler: () => void | Promise<void>) {

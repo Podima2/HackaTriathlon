@@ -559,6 +559,21 @@ ensureSwimStorage();
 ensureMarketRegistryStorage();
 ensureIntervalMarketRegistryStorage();
 
+const broadcastConfigFilePath = join(process.cwd(), "data", "broadcast-config.json");
+type BroadcastConfig = { youtubeUrl?: string };
+function loadBroadcastConfig(): BroadcastConfig {
+  try {
+    if (existsSync(broadcastConfigFilePath)) {
+      return JSON.parse(readFileSync(broadcastConfigFilePath, "utf8")) as BroadcastConfig;
+    }
+  } catch {}
+  return {};
+}
+function saveBroadcastConfig(config: BroadcastConfig) {
+  mkdirSync(join(process.cwd(), "data"), { recursive: true });
+  writeFileSync(broadcastConfigFilePath, JSON.stringify(config, null, 2));
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
   applyCorsHeaders(res);
@@ -606,6 +621,32 @@ const server = createServer(async (req, res) => {
       ready: Boolean(serverFaucetEnabled && faucetPrivateKey && collateralTokenAddress),
       externalFaucetUrl: "https://faucet.circle.com/",
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/config") {
+    const config = loadBroadcastConfig();
+    const youtubeUrl = config.youtubeUrl ?? process.env.YOUTUBE_EMBED_URL ?? "";
+    return sendJson(res, 200, { ok: true, youtubeUrl });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/config") {
+    if (!isAuthorizedAdminRequest(req)) {
+      return sendJson(res, adminApiKey ? 401 : 503, { error: adminApiKey ? "Unauthorized" : "Admin API not configured" });
+    }
+    try {
+      const body = (await readJsonBody(req)) as { youtubeUrl?: string };
+      const youtubeUrl = typeof body.youtubeUrl === "string" ? body.youtubeUrl.trim() : undefined;
+      if (youtubeUrl === undefined) {
+        return sendJson(res, 400, { error: "Expected youtubeUrl" });
+      }
+      const config = loadBroadcastConfig();
+      config.youtubeUrl = youtubeUrl;
+      saveBroadcastConfig(config);
+      return sendJson(res, 200, { ok: true, youtubeUrl });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save config";
+      return sendJson(res, 500, { error: message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/admin/trades") {
