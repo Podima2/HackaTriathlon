@@ -4,12 +4,14 @@ import {
   custom,
   defineChain,
   formatUnits,
+  getAddress,
   http,
   keccak256,
   parseUnits,
   stringToHex,
 } from "viem";
 import type { Address } from "viem";
+import Privy, { LocalStorage, type OAuthProviderID } from "@privy-io/js-sdk-core";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -17,24 +19,68 @@ const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
   throw new Error("Missing #app root");
 }
+const appRoot = app;
 
 const ARC_TESTNET_CHAIN_ID = 5042002;
 const ARC_TESTNET_RPC_URL = "https://rpc.testnet.arc.network";
 const ARC_TESTNET_EXPLORER_URL = "https://testnet.arcscan.app";
 const ARC_TESTNET_USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
+const LIVE_INTERVAL_MS = 4 * 60_000;
+const LIVE_INTERVAL_MINUTES = LIVE_INTERVAL_MS / 60_000;
+const LIVE_INTERVAL_LABEL = `${LIVE_INTERVAL_MINUTES}-minute`;
 const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID ?? ARC_TESTNET_CHAIN_ID);
 const CHAIN_NAME = import.meta.env.VITE_CHAIN_NAME ?? "Arc Testnet";
 const RPC_URL = import.meta.env.VITE_RPC_URL ?? ARC_TESTNET_RPC_URL;
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-const TOKEN_ADDRESS = (import.meta.env.VITE_COLLATERAL_TOKEN ??
-  ARC_TESTNET_USDC_ADDRESS) as Address;
+const PRIVY_APP_ID = (import.meta.env.VITE_PRIVY_APP_ID ?? "").trim();
+const PRIVY_OAUTH_PROVIDERS: ReadonlyArray<{
+  id: OAuthProviderID;
+  label: string;
+  iconSvg: string;
+}> = [
+  {
+    id: "google",
+    label: "Continue with Google",
+    iconSvg:
+      '<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C33.6 6.1 29 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.1 18.9 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C33.6 6.1 29 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5 0 9.6-1.9 13-5.1l-6-5.1c-2 1.5-4.4 2.2-7 2.2-5.2 0-9.6-3.3-11.2-8l-6.5 5C9.6 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.2-4 5.6l6 5.1C40.9 35.9 44 30.4 44 24c0-1.2-.1-2.3-.4-3.5z"/></svg>',
+  },
+  {
+    id: "github",
+    label: "Continue with GitHub",
+    iconSvg:
+      '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor"><path d="M12 .5C5.6.5.5 5.6.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2.1c-3.2.7-3.9-1.5-3.9-1.5-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.6-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.9-5.8 7.9-10.9C23.5 5.6 18.4.5 12 .5z"/></svg>',
+  },
+  {
+    id: "twitter",
+    label: "Continue with X",
+    iconSvg:
+      '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor"><path d="M18.244 2H21.5l-7.49 8.56L23 22h-6.828l-5.34-6.98L4.72 22H1.462l8.02-9.166L1 2h6.99l4.828 6.38L18.244 2zm-1.197 18h1.836L7.045 4H5.1l11.947 16z"/></svg>',
+  },
+];
+const PRIVY_OAUTH_PROVIDER_IDS = new Set<OAuthProviderID>(
+  PRIVY_OAUTH_PROVIDERS.map((entry) => entry.id),
+);
+const DEFAULT_PRIVY_OAUTH_PROVIDER: OAuthProviderID = "google";
+const normalizeAddressEnv = (value: string | undefined, fallback: string): Address =>
+  getAddress((value ?? fallback).trim());
+const TOKEN_ADDRESS = normalizeAddressEnv(import.meta.env.VITE_COLLATERAL_TOKEN, ARC_TESTNET_USDC_ADDRESS);
 const COLLATERAL_SYMBOL = import.meta.env.VITE_COLLATERAL_SYMBOL ?? "USDC";
 const COLLATERAL_DECIMALS = Number(import.meta.env.VITE_COLLATERAL_DECIMALS ?? 6);
-const MARKET_ADDRESS = (import.meta.env.VITE_PREDICTION_MARKET ??
-  "0x86e8A602DB5A6c6cD9c5C5a753195F326BA4C1F3") as Address;
-const INTERVAL_MARKET_ADDRESS = (import.meta.env.VITE_PARIMUTUEL_INTERVAL_MARKET ?? "") as Address;
-const SETTLEMENT_OPERATOR = (import.meta.env.VITE_SETTLEMENT_OPERATOR ??
-  "0x8B6E5E7D4116f766BF1BE714FCc8bcAfA23D32D2") as Address;
+const TRADING_UNIT_LABEL = import.meta.env.VITE_TRADING_UNIT_LABEL ?? "points";
+const TRADING_UNIT_DECIMALS = Math.max(0, COLLATERAL_DECIMALS - 3);
+const SPECTATOR_STARTING_POINTS = Number(import.meta.env.VITE_SPECTATOR_STARTING_POINTS ?? 1000);
+const MARKET_ADDRESS = normalizeAddressEnv(
+  import.meta.env.VITE_PREDICTION_MARKET,
+  "0x86e8A602DB5A6c6cD9c5C5a753195F326BA4C1F3",
+);
+const INTERVAL_MARKET_ADDRESS = normalizeAddressEnv(
+  import.meta.env.VITE_PARIMUTUEL_INTERVAL_MARKET,
+  "0x500360a7EdB359d3cB3F3Df91d195F7CAa37D734",
+);
+const SETTLEMENT_OPERATOR = normalizeAddressEnv(
+  import.meta.env.VITE_SETTLEMENT_OPERATOR,
+  "0x8B6E5E7D4116f766BF1BE714FCc8bcAfA23D32D2",
+);
 const configuredChain = defineChain({
   id: CHAIN_ID,
   name: CHAIN_NAME,
@@ -53,10 +99,188 @@ const configuredChain = defineChain({
 });
 
 const YOUTUBE_STORAGE_KEY = "hackatri.youtubeEmbed";
+const SPECTATOR_AUTH_TOKEN_STORAGE_KEY = "hackatri.spectatorAuthToken";
+const SPECTATOR_SESSION_STORAGE_KEY = "hackatri.spectatorSession";
+const PRIVY_OAUTH_PROVIDER_STORAGE_KEY = "hackatri.privyOAuthProvider";
+const PREFERRED_SESSION_STORAGE_KEY = "hackatri.preferredSessionId";
+const PENDING_PREDICTIONS_STORAGE_KEY = "hackatri.pendingPredictions";
+const ADMIN_API_KEY_STORAGE_KEY = "hackatri.adminApiKey";
 const DEFAULT_YOUTUBE_URL = "https://www.youtube.com/embed/live_stream?channel=YOUR_CHANNEL_ID";
+const ONCHAIN_REFRESH_INTERVAL_MS = 60_000;
+const ADMIN_TRADES_REFRESH_INTERVAL_MS = 5 * 60_000;
+const SHOW_RR_INTERVAL_EXPERIENCE = false;
 const isAdminRoute = window.location.pathname === "/admin";
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 let revealObserver: IntersectionObserver | null = null;
+let privyClientPromise: Promise<Privy> | null = null;
+
+// ── i18n ─────────────────────────────────────────────────────────────────────
+const LANG_STORAGE_KEY = "hackatri.lang";
+let currentLang: "en" | "es" = (() => {
+  const stored = localStorage.getItem(LANG_STORAGE_KEY);
+  if (stored === "es" || stored === "en") return stored;
+  return navigator.language.startsWith("es") ? "es" : "en";
+})();
+
+const TR = {
+  en: {
+    "landing.kicker": "PreCannes access",
+    "landing.lede": "Enter the live broadcast desk with a funded testing wallet, then trade the current heart-rate and steps intervals from the main screen.",
+    "landing.cta": "Get started",
+    "nav.broadcast.kicker": "Broadcast board",
+    "nav.broadcast.title": "Live broadcast",
+    "nav.sponsored": "Sponsored by",
+    "nav.signout": "Sign out",
+    "nav.signedin": "Signed in",
+    "nav.leaderboard": "Leaderboard",
+    "leaderboard.title": "Leaderboard",
+    "leaderboard.loading": "Loading…",
+    "leaderboard.empty": "No entries yet",
+    "leaderboard.rank": "Rank",
+    "leaderboard.player": "Player",
+    "leaderboard.points": "Points",
+    "trade.kicker": "Trade window",
+    "trade.hr.title": "Heart Rate",
+    "trade.steps.title": "Steps",
+    "trade.rr.title": "RR Interval",
+    "trade.above": "Above",
+    "trade.below": "Below",
+    "trade.timeleft": "Time left",
+    "trade.prevscore": "Previous score",
+    "trade.livehr": "Live heart rate",
+    "trade.waiting": "Waiting for live session...",
+    "trade.size": "Position size",
+    "trade.submit": "Enter position",
+    "account.positions": "Open positions",
+    "account.nopositions": "No open positions",
+    "account.won": "Won ✓",
+    "account.lost": "Lost",
+    "modal.placed.kicker": "Prediction made",
+    "modal.placed.body": "Your wager is locked in. The market settles when the interval closes — you'll get a notification with your result.",
+    "modal.won": "You won",
+    "modal.lost": "Prediction missed",
+    "modal.refund": "Refund available",
+    "modal.claim": "Claim payout",
+    "modal.gotit": "Got it",
+    "modal.viewtx": "View transaction",
+    "trail.kicker": "Settlement proof",
+    "trail.title": "Trustless trail",
+    "trail.lede": "Each interval links telemetry, onchain market creation, settlement transaction, and claim state.",
+    "broadcast.standby.kicker": "Broadcast standby",
+    "broadcast.standby.title": "Live video is being prepared.",
+    "trade.chart.waiting.hr": "Waiting for live heart-rate samples",
+    "trade.chart.waiting.rr": "Waiting for live RR samples",
+    "trade.chart.waiting.steps": "Waiting for live steps samples",
+    "trade.chart.lede": "The chart will begin drawing as soon as telemetry arrives.",
+    "trade.waiting.hr": "Waiting for live session...",
+    "trade.waiting.steps": "Waiting for live steps session...",
+    "trade.waiting.rr": "Waiting for live RR session...",
+    "trade.unavailable": "Interval unavailable",
+    "trade.settled": "Interval settled",
+    "trade.livesteps": "Live steps",
+    "trade.liverr": "Live RR",
+    "login.kicker": "PreCannes",
+    "login.title": "Log in or sign up",
+    "login.subtitle": `Log in with email or a social provider. We'll fund your wallet with ${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL} as soon as you land back here.`,
+    "login.email": "Email",
+    "login.continue": "Continue with email",
+    "login.codehint": "Login code",
+    "login.verify": "Verify & log in",
+    "login.back": "Use a different email",
+    "login.or": "or",
+  },
+  es: {
+    "landing.kicker": "Acceso PreCannes",
+    "landing.lede": "Accede al escritorio de emisión en vivo con una cartera de prueba financiada, y opera en los intervalos actuales de frecuencia cardíaca y pasos.",
+    "landing.cta": "Comenzar",
+    "nav.broadcast.kicker": "Panel de emisión",
+    "nav.broadcast.title": "Emisión en vivo",
+    "nav.sponsored": "Patrocinado por",
+    "nav.signout": "Cerrar sesión",
+    "nav.signedin": "Sesión iniciada",
+    "nav.leaderboard": "Clasificación",
+    "leaderboard.title": "Clasificación",
+    "leaderboard.loading": "Cargando…",
+    "leaderboard.empty": "Sin entradas aún",
+    "leaderboard.rank": "Pos.",
+    "leaderboard.player": "Jugador",
+    "leaderboard.points": "Puntos",
+    "trade.kicker": "Ventana de trading",
+    "trade.hr.title": "Frecuencia Cardíaca",
+    "trade.steps.title": "Pasos",
+    "trade.rr.title": "Intervalo RR",
+    "trade.above": "Por encima",
+    "trade.below": "Por debajo",
+    "trade.timeleft": "Tiempo restante",
+    "trade.prevscore": "Puntuación anterior",
+    "trade.livehr": "FC en vivo",
+    "trade.waiting": "Esperando sesión en vivo...",
+    "trade.size": "Tamaño de posición",
+    "trade.submit": "Entrar en posición",
+    "account.positions": "Posiciones abiertas",
+    "account.nopositions": "Sin posiciones abiertas",
+    "account.won": "Ganado ✓",
+    "account.lost": "Perdido",
+    "modal.placed.kicker": "Predicción realizada",
+    "modal.placed.body": "Tu apuesta está confirmada. El mercado cierra al terminar el intervalo — recibirás una notificación con tu resultado.",
+    "modal.won": "¡Ganaste!",
+    "modal.lost": "Predicción fallida",
+    "modal.refund": "Reembolso disponible",
+    "modal.claim": "Reclamar pago",
+    "modal.gotit": "Entendido",
+    "modal.viewtx": "Ver transacción",
+    "trail.kicker": "Prueba de liquidación",
+    "trail.title": "Rastro verificable",
+    "trail.lede": "Cada intervalo enlaza telemetría, creación del mercado onchain, transacción de liquidación y estado de reclamación.",
+    "broadcast.standby.kicker": "En espera de emisión",
+    "broadcast.standby.title": "El video en vivo está siendo preparado.",
+    "trade.chart.waiting.hr": "Esperando muestras de frecuencia cardíaca en vivo",
+    "trade.chart.waiting.rr": "Esperando muestras de RR en vivo",
+    "trade.chart.waiting.steps": "Esperando muestras de pasos en vivo",
+    "trade.chart.lede": "El gráfico comenzará a dibujarse tan pronto llegue la telemetría.",
+    "trade.waiting.hr": "Esperando sesión en vivo...",
+    "trade.waiting.steps": "Esperando sesión de pasos en vivo...",
+    "trade.waiting.rr": "Esperando sesión RR en vivo...",
+    "trade.unavailable": "Intervalo no disponible",
+    "trade.settled": "Intervalo liquidado",
+    "trade.livesteps": "Pasos en vivo",
+    "trade.liverr": "RR en vivo",
+    "login.kicker": "PreCannes",
+    "login.title": "Iniciar sesión o registrarse",
+    "login.subtitle": `Inicia sesión con correo o proveedor social. Financiaremos tu cartera con ${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL} en cuanto regreses.`,
+    "login.email": "Correo electrónico",
+    "login.continue": "Continuar con correo",
+    "login.codehint": "Código de inicio de sesión",
+    "login.verify": "Verificar e iniciar sesión",
+    "login.back": "Usar otro correo",
+    "login.or": "o",
+  },
+} as const;
+
+type TKey = keyof typeof TR.en;
+function t(key: TKey): string {
+  return (TR[currentLang] as Record<string, string>)[key] ?? (TR.en as Record<string, string>)[key] ?? key;
+}
+
+function translatePage() {
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((el) => {
+    el.textContent = t(el.dataset.i18n as TKey);
+  });
+  renderBroadcastMedia();
+  renderAccountOpenPositions();
+}
+
+type PrivyLinkedAccount = {
+  type?: string;
+  email?: unknown;
+  address?: unknown;
+  subject?: unknown;
+  username?: unknown;
+};
+
+type PrivyUserLike = {
+  linked_accounts: PrivyLinkedAccount[];
+};
 
 const tokenAbi = [
   {
@@ -383,6 +607,19 @@ type FaucetStatus = {
   externalFaucetUrl?: string;
 };
 
+type SpectatorSession = {
+  spectatorId: string;
+  email: string;
+  authToken: string;
+  walletAddress: Address;
+  provider: "local";
+  fundedAt?: string | null;
+  fundedAmount?: string | null;
+  fundedAmountFormatted?: string | null;
+  approvedAt?: string | null;
+  fundingTxHash?: string | null;
+};
+
 type TelemetrySample = {
   sampleSeq: number;
   bpm: number;
@@ -417,6 +654,14 @@ type IntervalMarketRegistryRecord = {
   sessionId: string;
   metric: "hr" | "rr" | "steps";
   signalType: number;
+  contractAddress?: string;
+  createdTxHash?: string;
+  settledTxHash?: string;
+  settledAt?: string;
+  settledOutcomeAbove?: boolean;
+  settledObservedValue?: number;
+  settledSampleSeq?: number;
+  settledSampleElapsedMs?: number;
   referenceValue: number;
   windowStartElapsedMs: number;
   windowEndElapsedMs: number;
@@ -448,6 +693,27 @@ type IntervalParimutuelMarketRecord = {
   metric: "hr" | "rr" | "steps";
 };
 
+type AdminTradeRecord = {
+  kind: "threshold" | "interval";
+  marketId: number;
+  metric: string;
+  sessionId: string | null;
+  side: string;
+  amount: string;
+  amountFormatted: string;
+  account: Address;
+  txHash: `0x${string}`;
+  blockNumber: string | null;
+  logIndex: number | null;
+  marketLabel: string;
+  referenceValue?: number | null;
+  status?: string | null;
+  settledOutcomeAbove?: boolean | null;
+  settledObservedValue?: number | null;
+};
+
+type SpectatorTradeRecord = AdminTradeRecord;
+
 type IntervalWindowPayload = {
   ok: boolean;
   sessionId: string;
@@ -463,10 +729,6 @@ type IntervalWindowPayload = {
     phoneObservedAt: string;
     value: number;
   }>;
-};
-
-type TelemetryWindowResponse = {
-  samples: TelemetrySample[];
 };
 
 type StatusTone = "neutral" | "success" | "warning" | "error";
@@ -487,14 +749,20 @@ const publicClient = createPublicClient({
 
 const state = {
   account: null as Address | null,
+  spectator: null as SpectatorSession | null,
   sessions: [] as TelemetrySession[],
   currentSessionId: null as string | null,
+  preferredSessionId: localStorage.getItem(PREFERRED_SESSION_STORAGE_KEY),
   markets: [] as MarketRecord[],
   balance: 0n,
   allowance: 0n,
+  thresholdAllowance: 0n,
+  intervalAllowance: 0n,
   youtubeUrl: localStorage.getItem(YOUTUBE_STORAGE_KEY) ?? DEFAULT_YOUTUBE_URL,
   status: "Idle",
   statusTone: "neutral" as StatusTone,
+  lastRefreshAt: null as Date | null,
+  refreshFailureCount: 0,
   faucet: null as FaucetStatus | null,
   marketMeta: new Map<number, MarketMeta>(),
   intervalMarketRegistry: [] as IntervalMarketRegistryRecord[],
@@ -521,24 +789,135 @@ const state = {
   stepsIntervalSelectedSide: "above" as "above" | "below",
   rrDistributionValues: [] as number[],
   rrDistributionPrevSessionId: null as string | null,
+  pendingPredictions: new Map<string, PendingPrediction>(),
+  lastSeenIntervalStatus: new Map<string, number>(),
+  predictionModalAction: null as null | (() => Promise<void> | void),
+  adminTrades: [] as AdminTradeRecord[],
+  spectatorTrades: [] as SpectatorTradeRecord[],
+  adminTradesStatus: "idle" as "idle" | "loading" | "ready" | "error",
+  adminTradesError: null as string | null,
+  lastOnchainRefreshAt: 0,
+  lastAdminTradesRefreshAt: 0,
+};
+
+type PendingPrediction = {
+  marketId: bigint;
+  metric: "hr" | "rr" | "steps";
+  metricLabel: string;
+  isAbove: boolean;
+  amount: number;
+  reference: number;
+  unit: string;
+  txHash: `0x${string}`;
+  notified: boolean;
 };
 
 let walletListenersAttached = false;
+let mainExperienceRendered = false;
+let refreshTimersAttached = false;
+let authenticatedHydrationPromise: Promise<void> | null = null;
 
-app.innerHTML = isAdminRoute ? renderAdminShell() : renderUserShell();
+appRoot.innerHTML = isAdminRoute ? renderAdminShell() : renderLandingShell();
 bindStaticHandlers();
 setupContainerMotion();
 void boot();
 
 async function boot() {
   try {
-    await refreshFaucet();
-    await refreshSessions();
+    restorePendingPredictions();
+    await handlePrivyOAuthCallback();
+    await restoreSpectatorSession();
     await restoreWallet();
-    await refreshData();
+    if (!isAdminRoute && !state.spectator) {
+      renderLandingExperience();
+      return;
+    }
+    await enterAuthenticatedExperience();
   } catch (error) {
     setStatus(userFacingErrorMessage(error, "Live event data is temporarily unavailable. Retrying automatically."), "error");
   }
+}
+
+function activeTradingAddress(): Address | null {
+  return state.account ?? state.spectator?.walletAddress ?? null;
+}
+
+function usingSpectatorWallet() {
+  return Boolean(state.spectator);
+}
+
+function renderLandingShell() {
+  return `
+    <div class="landing-shell">
+      <main class="landing-hero" data-reveal="hero" data-reveal-order="0">
+        <div class="landing-logo-lockup">
+          <img src="https://www.popbike.fr/templates/captain/img/interface/logo.svg" alt="Pop'Bike" class="landing-logo" />
+        </div>
+        <div class="landing-copy">
+          <div class="kicker" data-i18n="landing.kicker">${t("landing.kicker")}</div>
+          <h1>THE HACKATRIATHLON</h1>
+          <p class="lede" data-i18n="landing.lede">${t("landing.lede")}</p>
+        </div>
+        <div class="landing-actions">
+          <button id="landing-get-started" class="landing-primary" type="button" data-i18n="landing.cta">${t("landing.cta")}</button>
+        </div>
+      </main>
+      ${renderPrivyLoginModal()}
+    </div>
+  `;
+}
+
+function renderLandingExperience() {
+  if (isAdminRoute || state.spectator) {
+    return;
+  }
+  mainExperienceRendered = false;
+  appRoot.innerHTML = renderLandingShell();
+  bindStaticHandlers();
+  setupContainerMotion();
+}
+
+async function enterAuthenticatedExperience() {
+  if (!isAdminRoute && !state.spectator) {
+    renderLandingExperience();
+    return;
+  }
+  if (!mainExperienceRendered) {
+    mainExperienceRendered = true;
+    appRoot.innerHTML = isAdminRoute ? renderAdminShell() : renderUserShell();
+    bindStaticHandlers();
+    setupContainerMotion();
+  }
+  startRefreshTimers();
+  authenticatedHydrationPromise ??= hydrateAuthenticatedExperience().finally(() => {
+    authenticatedHydrationPromise = null;
+  });
+  await authenticatedHydrationPromise;
+}
+
+async function hydrateAuthenticatedExperience() {
+  await refreshFaucet();
+  await refreshWalletState();
+  await hydrateCurrentSessionFast();
+  await refreshIntervalExperience({ refreshOnchain: false }).catch(() => {
+    // Avoid blocking the first live chart render on a transient read failure.
+  });
+  if (SHOW_RR_INTERVAL_EXPERIENCE) {
+    await refreshRrIntervalExperience({ refreshOnchain: false }).catch(() => {
+      // Avoid blocking the first live chart render on a transient read failure.
+    });
+  }
+  await refreshStepsIntervalExperience({ refreshOnchain: false }).catch(() => {
+    // Avoid blocking the first live chart render on a transient read failure.
+  });
+  await refreshData();
+}
+
+function startRefreshTimers() {
+  if (refreshTimersAttached) {
+    return;
+  }
+  refreshTimersAttached = true;
   renderMarketCountdowns();
   renderIntervalCountdown();
   window.setInterval(() => {
@@ -546,10 +925,19 @@ async function boot() {
     renderIntervalCountdown();
   }, 1000);
   window.setInterval(() => {
+    if (!isAdminRoute && !state.spectator) {
+      return;
+    }
     void refreshData().catch((error) => {
       setStatus(userFacingErrorMessage(error, "Couldn't refresh the live event data. Retrying automatically."), "warning");
     });
   }, 8000);
+  window.setInterval(() => {
+    if (!isAdminRoute && !state.spectator) {
+      return;
+    }
+    void detectIntervalSettlements();
+  }, 4000);
 }
 
 function renderUserShell() {
@@ -557,23 +945,44 @@ function renderUserShell() {
     <div class="app-shell">
       <header class="topbar mobile-top" data-reveal="topbar" data-reveal-order="0">
         <div class="hero-copy">
-          <div class="kicker">HackaTriathlon Live Analysis</div>
+          <button id="lang-toggle" class="lang-toggle" type="button" aria-label="Switch language">${currentLang === "en" ? "ES" : "EN"}</button>
           <h1>THE HACKATRIATHLON</h1>
-          <p class="lede">A live desk for reading the race in real time. Keep the broadcast in view, scan the active heart-rate window, and move into the interval market only when the signal and timing line up.</p>
         </div>
         <div class="topbar-meta">
-          <div class="topbar-badge">Sport Analyst View</div>
-          <div class="topbar-note">Broadcast-led market read • fast analyst terminal</div>
+          <span id="account-topbar-points" class="account-topbar-points"></span>
+          <details class="account-menu">
+            <summary class="account-avatar" aria-label="Open account menu">
+              <span id="account-avatar-initial">?</span>
+            </summary>
+            <div class="account-menu-card">
+              <strong id="account-menu-email" data-i18n="nav.signedin">${t("nav.signedin")}</strong>
+              <span id="account-menu-points">0 ${TRADING_UNIT_LABEL}</span>
+              <div id="account-open-positions" class="account-open-positions"></div>
+              <button id="leaderboard-open-button" class="leaderboard-open-button" type="button">${t("nav.leaderboard")}</button>
+              <button id="privy-logout-button" class="privy-logout-button" type="button" data-i18n="nav.signout">${t("nav.signout")}</button>
+            </div>
+          </details>
         </div>
       </header>
+
+      ${renderPrivyLoginModal()}
+      ${renderPredictionNotificationModal()}
+      <div id="leaderboard-overlay" class="leaderboard-overlay" hidden>
+        <div class="leaderboard-card">
+          <div class="leaderboard-card-head">
+            <div class="leaderboard-card-title">${t("leaderboard.title")}</div>
+            <button id="leaderboard-close-button" class="leaderboard-close-button" type="button" aria-label="Close">✕</button>
+          </div>
+          <div id="leaderboard-body" class="leaderboard-body"></div>
+        </div>
+      </div>
 
       <main class="user-layout">
         <section class="frosted broadcast-hero" data-reveal="hero" data-reveal-order="1">
           <div class="section-head section-head-strong">
             <div>
-              <div class="section-kicker">Broadcast board</div>
-              <h2>Live broadcast</h2>
-              <p class="section-lede">Keep the race feed in front. The active window, reference line, and trading state sit directly under the player so the call and the position stay in the same sightline.</p>
+              <div class="section-kicker" data-i18n="nav.broadcast.kicker">${t("nav.broadcast.kicker")}</div>
+              <h2 data-i18n="nav.broadcast.title">${t("nav.broadcast.title")}</h2>
             </div>
           </div>
           <div class="broadcast-stage">
@@ -584,10 +993,11 @@ function renderUserShell() {
                 </div>
               </div>
               <div class="sponsor-signoff">
-                <span>Sponsored by</span>
+                <span data-i18n="nav.sponsored">${t("nav.sponsored")}</span>
                 <img src="https://www.popbike.fr/templates/captain/img/interface/logo.svg" alt="Pop'Bike" class="sponsor-logo" />
               </div>
             </div>
+            ${SHOW_RR_INTERVAL_EXPERIENCE ? `
             <div class="hrv-distribution-panel">
               <div class="hrv-distribution-header">
                 <span class="hrv-distribution-label">HRV Distribution</span>
@@ -600,66 +1010,41 @@ function renderUserShell() {
                 <div class="hrv-stat"><span>Mean</span><strong id="rr-dist-mean">--</strong></div>
               </div>
             </div>
-          </div>
-          <div class="broadcast-strip">
-            <div class="broadcast-strip-intro">
-              <div class="broadcast-strip-head">
-                <div class="section-kicker">Current interval signal</div>
-                <strong>Read the active 5-minute window, the line to beat, and the live heart rate without leaving the broadcast.</strong>
-              </div>
-              <div class="broadcast-notes">
-                <div id="hero-market-note" class="broadcast-note">Waiting for the current interval market to open.</div>
-                <div id="hero-access-note" class="broadcast-note muted">Connect a wallet below if you want to trade from this live view.</div>
-              </div>
-              <div class="hero-actions">
-                <a href="#live-market" class="hero-link">Open interval market</a>
-                <a href="#trading-access" class="hero-link secondary-link">Enable trading</a>
-              </div>
-            </div>
-            <div class="broadcast-stats">
-              <div class="broadcast-stat">
-                <span>Current window</span>
-                <strong id="hero-interval-window">Waiting for live session</strong>
-              </div>
-              <div class="broadcast-stat">
-                <span>Reference HR</span>
-                <strong id="hero-reference-bpm">--</strong>
-              </div>
-              <div class="broadcast-stat">
-                <span>Live HR</span>
-                <strong id="hero-current-bpm">--</strong>
-              </div>
-            </div>
+            ` : ""}
           </div>
         </section>
 
         <section class="creator-card frosted interval-section live-market-section" id="live-market" data-reveal="panel" data-reveal-order="2">
           <div class="section-head section-head-strong">
             <div>
-              <div class="section-kicker">Trade window</div>
-              <h2>Current interval market</h2>
-              <p class="section-lede">Take a position on where this live 5-minute window closes relative to the reference heart rate shown above.</p>
+              <div class="section-kicker" data-i18n="trade.kicker">${t("trade.kicker")}</div>
+              <h2 data-i18n="trade.hr.title">${t("trade.hr.title")}</h2>
             </div>
           </div>
           <div id="interval-hero" class="interval-hero">
             <div class="interval-stage">
               <div class="interval-headline">
                 <div>
-                  <h3 id="interval-title">Live 5-minute interval</h3>
+                  <h3 id="interval-title">Live ${LIVE_INTERVAL_LABEL} interval</h3>
                   <p id="interval-subtitle" class="market-copy">Waiting for live session...</p>
                 </div>
-                <div id="interval-countdown" class="interval-countdown">--:--</div>
               </div>
-              <div class="interval-stats">
-                <div class="interval-stat">
-                  <span>Reference HR</span>
-                  <strong id="interval-reference">--</strong>
-                </div>
-                <div class="interval-stat">
-                  <span>Live HR</span>
-                  <strong id="interval-current">--</strong>
-                </div>
-              </div>
+              <table class="interval-signal-table" aria-label="Heart rate interval status">
+                <thead>
+                  <tr>
+                    <th data-i18n="trade.timeleft">${t("trade.timeleft")}</th>
+                    <th data-i18n="trade.prevscore">${t("trade.prevscore")}</th>
+                    <th data-i18n="trade.livehr">${t("trade.livehr")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td id="interval-countdown">--:--</td>
+                    <td id="interval-reference">--</td>
+                    <td id="interval-current">--</td>
+                  </tr>
+                </tbody>
+              </table>
               <div class="interval-chart-wrap">
                 <svg id="interval-chart" viewBox="0 0 720 260" preserveAspectRatio="none"></svg>
               </div>
@@ -667,38 +1052,41 @@ function renderUserShell() {
             </div>
             <aside class="interval-trade">
               <div class="trade-switch">
-                <button id="interval-side-above" class="trade-side active" data-side="above">Above reference <span id="interval-above-multiplier">1.00x</span></button>
-                <button id="interval-side-below" class="trade-side secondary" data-side="below">Below reference <span id="interval-below-multiplier">1.00x</span></button>
+                <button id="interval-side-above" class="trade-side active" data-side="above"><span data-i18n="trade.above">${t("trade.above")}</span> <span id="interval-above-multiplier">1.00x</span></button>
+                <button id="interval-side-below" class="trade-side secondary" data-side="below"><span data-i18n="trade.below">${t("trade.below")}</span> <span id="interval-below-multiplier">1.00x</span></button>
               </div>
               <div class="trade-panel">
-                <div class="trade-label">Position size</div>
-                <input id="interval-trade-amount" class="text-input trade-amount" type="number" min="1" step="1" value="10" />
-                <div class="trade-quick">
-                  <button class="secondary" id="interval-add-1">+1</button>
-                  <button class="secondary" id="interval-add-5">+5</button>
-                  <button class="secondary" id="interval-add-10">+10</button>
-                  <button class="secondary" id="interval-max">Max</button>
+                <div class="trade-label"><span data-i18n="trade.size">${t("trade.size")}</span> (${TRADING_UNIT_LABEL})</div>
+                <div class="trade-amount-field">
+                  <input id="interval-trade-amount" class="text-input trade-amount" type="number" min="1" step="1" value="100" inputmode="numeric" />
+                  <div class="trade-quick">
+                    <button class="secondary" id="interval-add-1">+25</button>
+                    <button class="secondary" id="interval-add-5">+100</button>
+                    <button class="secondary" id="interval-add-10">+250</button>
+                    <button class="secondary" id="interval-add-500">+500</button>
+                  </div>
                 </div>
-                <div id="interval-return-copy" class="market-copy">Loading interval pricing...</div>
-                <button id="interval-trade-submit">Enter interval position</button>
+                <div id="interval-return-copy" class="market-copy"></div>
+                <button id="interval-trade-submit" data-i18n="trade.submit">${t("trade.submit")}</button>
               </div>
             </aside>
           </div>
         </section>
 
+        ${SHOW_RR_INTERVAL_EXPERIENCE ? `
         <section class="creator-card frosted interval-section live-market-section" id="live-rr-market" data-reveal="panel" data-reveal-order="2">
           <div class="section-head section-head-strong">
             <div>
               <div class="section-kicker">Trade window</div>
               <h2>Current RR interval market</h2>
-              <p class="section-lede">Take a position on where this live 5-minute window closes relative to the reference RR interval from the prior window.</p>
+              <p class="section-lede">Take a position on where this live ${LIVE_INTERVAL_LABEL} window closes relative to the reference RR interval from the prior window.</p>
             </div>
           </div>
           <div id="rr-interval-hero" class="interval-hero">
             <div class="interval-stage">
               <div class="interval-headline">
                 <div>
-                  <h3 id="rr-interval-title">Live 5-minute RR interval</h3>
+                  <h3 id="rr-interval-title">Live ${LIVE_INTERVAL_LABEL} RR interval</h3>
                   <p id="rr-interval-subtitle" class="market-copy">Waiting for live RR session...</p>
                 </div>
                 <div id="rr-interval-countdown" class="interval-countdown">--:--</div>
@@ -724,13 +1112,15 @@ function renderUserShell() {
                 <button id="rr-interval-side-below" class="trade-side secondary" data-side="below">Below reference <span id="rr-interval-below-multiplier">1.00x</span></button>
               </div>
               <div class="trade-panel">
-                <div class="trade-label">Position size</div>
-                <input id="rr-interval-trade-amount" class="text-input trade-amount" type="number" min="1" step="1" value="10" />
-                <div class="trade-quick">
-                  <button class="secondary" id="rr-interval-add-1">+1</button>
-                  <button class="secondary" id="rr-interval-add-5">+5</button>
-                  <button class="secondary" id="rr-interval-add-10">+10</button>
-                  <button class="secondary" id="rr-interval-max">Max</button>
+                <div class="trade-label">Position size (${TRADING_UNIT_LABEL})</div>
+                <div class="trade-amount-field">
+                  <input id="rr-interval-trade-amount" class="text-input trade-amount" type="number" min="1" step="1" value="100" inputmode="numeric" />
+                  <div class="trade-quick">
+                    <button class="secondary" id="rr-interval-add-1">+25</button>
+                    <button class="secondary" id="rr-interval-add-5">+100</button>
+                    <button class="secondary" id="rr-interval-add-10">+250</button>
+                    <button class="secondary" id="rr-interval-max">Max</button>
+                  </div>
                 </div>
                 <div id="rr-interval-return-copy" class="market-copy">Loading RR interval pricing...</div>
                 <button id="rr-interval-trade-submit">Enter RR interval position</button>
@@ -738,34 +1128,39 @@ function renderUserShell() {
             </aside>
           </div>
         </section>
+        ` : ""}
 
         <section class="creator-card frosted interval-section live-market-section" id="live-steps-market" data-reveal="panel" data-reveal-order="3">
           <div class="section-head section-head-strong">
             <div>
               <div class="section-kicker">Trade window</div>
-              <h2>Current steps interval market</h2>
-              <p class="section-lede">Take a position on whether the total steps in this live 5-minute window finish above or below the prior 5-minute steps interval.</p>
+              <h2>Steps</h2>
             </div>
           </div>
           <div id="steps-interval-hero" class="interval-hero">
             <div class="interval-stage">
               <div class="interval-headline">
                 <div>
-                  <h3 id="steps-interval-title">Live 5-minute steps interval</h3>
+                  <h3 id="steps-interval-title">Live ${LIVE_INTERVAL_LABEL} steps interval</h3>
                   <p id="steps-interval-subtitle" class="market-copy">Waiting for live steps session...</p>
                 </div>
-                <div id="steps-interval-countdown" class="interval-countdown">--:--</div>
               </div>
-              <div class="interval-stats">
-                <div class="interval-stat">
-                  <span>Reference steps</span>
-                  <strong id="steps-interval-reference">--</strong>
-                </div>
-                <div class="interval-stat">
-                  <span>Live steps</span>
-                  <strong id="steps-interval-current">--</strong>
-                </div>
-              </div>
+              <table class="interval-signal-table" aria-label="Steps interval status">
+                <thead>
+                  <tr>
+                    <th data-i18n="trade.timeleft">${t("trade.timeleft")}</th>
+                    <th data-i18n="trade.prevscore">${t("trade.prevscore")}</th>
+                    <th data-i18n="trade.livesteps">${t("trade.livesteps")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td id="steps-interval-countdown">--:--</td>
+                    <td id="steps-interval-reference">--</td>
+                    <td id="steps-interval-current">--</td>
+                  </tr>
+                </tbody>
+              </table>
               <div class="interval-chart-wrap">
                 <svg id="steps-interval-chart" viewBox="0 0 720 260" preserveAspectRatio="none"></svg>
               </div>
@@ -773,27 +1168,40 @@ function renderUserShell() {
             </div>
             <aside class="interval-trade">
               <div class="trade-switch">
-                <button id="steps-interval-side-above" class="trade-side active" data-side="above">Above reference <span id="steps-interval-above-multiplier">1.00x</span></button>
-                <button id="steps-interval-side-below" class="trade-side secondary" data-side="below">Below reference <span id="steps-interval-below-multiplier">1.00x</span></button>
+                <button id="steps-interval-side-above" class="trade-side active" data-side="above">Above <span id="steps-interval-above-multiplier">1.00x</span></button>
+                <button id="steps-interval-side-below" class="trade-side secondary" data-side="below">Below <span id="steps-interval-below-multiplier">1.00x</span></button>
               </div>
               <div class="trade-panel">
-                <div class="trade-label">Position size</div>
-                <input id="steps-interval-trade-amount" class="text-input trade-amount" type="number" min="1" step="1" value="10" />
-                <div class="trade-quick">
-                  <button class="secondary" id="steps-interval-add-1">+1</button>
-                  <button class="secondary" id="steps-interval-add-5">+5</button>
-                  <button class="secondary" id="steps-interval-add-10">+10</button>
-                  <button class="secondary" id="steps-interval-max">Max</button>
+                <div class="trade-label">Position size (${TRADING_UNIT_LABEL})</div>
+                <div class="trade-amount-field">
+                  <input id="steps-interval-trade-amount" class="text-input trade-amount" type="number" min="1" step="1" value="100" inputmode="numeric" />
+                  <div class="trade-quick">
+                    <button class="secondary" id="steps-interval-add-1">+25</button>
+                    <button class="secondary" id="steps-interval-add-5">+100</button>
+                    <button class="secondary" id="steps-interval-add-10">+250</button>
+                    <button class="secondary" id="steps-interval-add-500">+500</button>
+                  </div>
                 </div>
-                <div id="steps-interval-return-copy" class="market-copy">Loading steps interval pricing...</div>
-                <button id="steps-interval-trade-submit">Enter steps interval position</button>
+                <div id="steps-interval-return-copy" class="market-copy"></div>
+                <button id="steps-interval-trade-submit" data-i18n="trade.submit">${t("trade.submit")}</button>
               </div>
             </aside>
           </div>
         </section>
 
         <div class="support-grid">
-          <section class="frosted market-board secondary-board" data-reveal="panel" data-reveal-order="3">
+          <section class="frosted settlement-trail" data-reveal="panel" data-reveal-order="3" hidden>
+            <div class="section-head">
+              <div>
+                <div class="section-kicker" data-i18n="trail.kicker">${t("trail.kicker")}</div>
+                <h2 data-i18n="trail.title">${t("trail.title")}</h2>
+                <p class="section-lede" data-i18n="trail.lede">${t("trail.lede")}</p>
+              </div>
+            </div>
+            <div id="settlement-trail-list" class="settlement-trail-list"></div>
+          </section>
+
+          <section class="frosted market-board secondary-board" data-reveal="panel" data-reveal-order="3" hidden>
             <div class="section-head">
               <div>
                 <div class="section-kicker">Market tape</div>
@@ -806,7 +1214,7 @@ function renderUserShell() {
           </section>
 
           <aside class="analyst-rail" data-reveal="panel" data-reveal-order="4">
-            <section class="frosted rail-card rail-card-primary">
+            <section class="frosted rail-card rail-card-primary" hidden>
               <div class="section-head rail-head">
                 <div>
                   <div class="section-kicker">Analyst rail</div>
@@ -840,19 +1248,25 @@ function renderUserShell() {
               <div id="my-wagers" class="my-wagers rail-wagers"></div>
             </section>
 
-            <details class="frosted access-panel" id="trading-access">
+            <details class="frosted access-panel" id="trading-access" open hidden>
               <summary class="access-summary">
                 <div class="access-summary-copy">
                   <div class="section-kicker">Trading access</div>
-                  <strong id="access-summary">Connect a wallet to enable live interval trading.</strong>
+                  <strong id="access-summary">Log in to get ${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL} for live markets.</strong>
                 </div>
                 <span class="summary-action">Open setup</span>
               </summary>
               <div class="access-panel-body">
-                <div class="access-actions">
-                  <button id="connect-wallet">Connect wallet</button>
-                  <button id="faucet-claim" class="secondary">Claim test balance</button>
-                  <button id="approve-button" class="secondary">Enable trading</button>
+                <div class="spectator-onboarding" id="spectator-onboard">
+                  <div class="spectator-copy">
+                    <div class="section-kicker">Social login</div>
+                    <strong id="spectator-summary">Log in to fund this live run.</strong>
+                    <div id="spectator-status" class="helper-copy">Privy verifies the user, then the backend funds a no-prompt testing seat with ${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL}.</div>
+                  </div>
+                  <div class="spectator-form">
+                    <button id="spectator-login-open" type="button">Open login modal</button>
+                    <button id="spectator-reset" class="secondary">Reset login wallet</button>
+                  </div>
                 </div>
                 <div class="access-stats">
                   <div class="status-card inner">
@@ -924,6 +1338,11 @@ function renderAdminShell() {
           <span class="meta-label">Status</span>
           <strong id="status-pill" data-tone="${state.statusTone}">${state.status}</strong>
         </div>
+        <div class="status-card frosted stream-health">
+          <span class="meta-label">Feed lag</span>
+          <strong id="stream-health-state">Checking feed</strong>
+          <small id="stream-health-detail">Waiting for telemetry samples.</small>
+        </div>
       </section>
 
       <main class="admin-layout">
@@ -994,14 +1413,455 @@ function renderAdminShell() {
           </div>
           <div id="market-grid" class="market-grid"></div>
         </section>
+
+        <section class="frosted panel-block admin-trade-panel">
+          <div class="section-head">
+            <div>
+              <h2>All user trades</h2>
+              <p class="section-lede">Every recorded position event across live interval and threshold markets, keyed by trading wallet.</p>
+            </div>
+            <button id="refresh-admin-trades" class="secondary" type="button">Refresh trades</button>
+          </div>
+          <div id="admin-trades" class="admin-trades" aria-live="polite"></div>
+        </section>
       </main>
     </div>
   `;
 }
 
+function renderPrivyLoginModal() {
+  const providerButtons = PRIVY_OAUTH_PROVIDERS.map((provider) => `
+    <button
+      class="privy-modal-provider"
+      type="button"
+      data-privy-provider="${provider.id}"
+    >
+      <span class="privy-modal-provider-icon" aria-hidden="true">${provider.iconSvg}</span>
+      <span class="privy-modal-provider-label">${provider.label}</span>
+    </button>
+  `).join("");
+  return `
+    <div id="privy-login-modal" class="privy-modal" role="dialog" aria-modal="true" aria-labelledby="privy-modal-title" hidden>
+      <div class="privy-modal-backdrop" data-privy-modal-close></div>
+      <div class="privy-modal-card">
+        <button class="privy-modal-close" type="button" data-privy-modal-close aria-label="Close login modal">×</button>
+        <div class="privy-modal-header">
+          <div class="privy-modal-kicker" data-i18n="login.kicker">${t("login.kicker")}</div>
+          <h2 id="privy-modal-title" data-i18n="login.title">${t("login.title")}</h2>
+          <p class="privy-modal-subtitle" data-i18n="login.subtitle">${t("login.subtitle")}</p>
+        </div>
+        <form id="privy-modal-email-form" class="privy-modal-email" data-step="request" novalidate>
+          <div class="privy-modal-email-step" data-step-panel="request">
+            <label class="privy-modal-field">
+              <span class="privy-modal-field-label" data-i18n="login.email">${t("login.email")}</span>
+              <input
+                id="privy-modal-email-input"
+                class="privy-modal-input"
+                type="email"
+                name="email"
+                autocomplete="email"
+                inputmode="email"
+                placeholder="you@example.com"
+                required
+              />
+            </label>
+            <button id="privy-modal-email-submit" class="privy-modal-email-submit" type="submit" data-i18n="login.continue">
+              ${t("login.continue")}
+            </button>
+          </div>
+          <div class="privy-modal-email-step" data-step-panel="verify" hidden>
+            <p class="privy-modal-email-hint">We sent a 6-digit code to <strong id="privy-modal-email-target"></strong>.</p>
+            <label class="privy-modal-field">
+              <span class="privy-modal-field-label">Login code</span>
+              <input
+                id="privy-modal-code-input"
+                class="privy-modal-input"
+                type="text"
+                name="code"
+                autocomplete="one-time-code"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                placeholder="123456"
+                maxlength="8"
+                required
+              />
+            </label>
+            <button id="privy-modal-code-submit" class="privy-modal-email-submit" type="submit" data-i18n="login.verify">
+              ${t("login.verify")}
+            </button>
+            <button id="privy-modal-code-back" class="privy-modal-email-link" type="button" data-i18n="login.back">
+              ${t("login.back")}
+            </button>
+          </div>
+        </form>
+        <div class="privy-modal-divider"><span>or</span></div>
+        <div class="privy-modal-providers">${providerButtons}</div>
+        <div id="privy-modal-status" class="privy-modal-status" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPredictionNotificationModal() {
+  return `
+    <div id="prediction-modal" class="prediction-modal" role="dialog" aria-modal="true" aria-labelledby="prediction-modal-title" hidden>
+      <div class="prediction-modal-backdrop" data-prediction-modal-close></div>
+      <div class="prediction-modal-card">
+        <button class="prediction-modal-close" type="button" data-prediction-modal-close aria-label="Close">×</button>
+        <div class="prediction-modal-kicker" id="prediction-modal-kicker">Prediction</div>
+        <h2 id="prediction-modal-title">Prediction made</h2>
+        <p class="prediction-modal-body" id="prediction-modal-body"></p>
+        <div class="prediction-modal-meta" id="prediction-modal-meta"></div>
+        <div class="prediction-modal-actions">
+          <a id="prediction-modal-link" class="prediction-modal-link" href="#" target="_blank" rel="noopener noreferrer" hidden>View transaction</a>
+          <button id="prediction-modal-action" class="prediction-modal-action" type="button" hidden></button>
+          <button id="prediction-modal-dismiss" class="prediction-modal-dismiss" type="button" data-i18n="modal.gotit">${t("modal.gotit")}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+type PredictionModalOptions = {
+  kicker: string;
+  title: string;
+  body: string;
+  meta?: string;
+  tone?: "neutral" | "success" | "warning" | "error";
+  link?: { label: string; href: string };
+  action?: { label: string; handler: () => Promise<void> | void };
+};
+
+function showPredictionModal(opts: PredictionModalOptions) {
+  const modal = document.getElementById("prediction-modal");
+  const kicker = document.getElementById("prediction-modal-kicker");
+  const title = document.getElementById("prediction-modal-title");
+  const body = document.getElementById("prediction-modal-body");
+  const meta = document.getElementById("prediction-modal-meta");
+  const link = document.getElementById("prediction-modal-link") as HTMLAnchorElement | null;
+  const action = document.getElementById("prediction-modal-action") as HTMLButtonElement | null;
+  if (!modal || !kicker || !title || !body || !meta || !link || !action) {
+    return;
+  }
+  kicker.textContent = opts.kicker;
+  title.textContent = opts.title;
+  body.textContent = opts.body;
+  meta.textContent = opts.meta ?? "";
+  meta.hidden = !opts.meta;
+  modal.dataset.tone = opts.tone ?? "neutral";
+  if (opts.link) {
+    link.textContent = opts.link.label;
+    link.href = opts.link.href;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+    link.removeAttribute("href");
+  }
+  if (opts.action) {
+    action.textContent = opts.action.label;
+    action.hidden = false;
+    action.disabled = false;
+    state.predictionModalAction = opts.action.handler;
+  } else {
+    action.hidden = true;
+    action.disabled = false;
+    state.predictionModalAction = null;
+  }
+  modal.hidden = false;
+  modal.classList.add("is-open");
+  document.body.classList.add("modal-open");
+}
+
+function closePredictionModal() {
+  const modal = document.getElementById("prediction-modal");
+  if (!modal) {
+    return;
+  }
+  modal.classList.remove("is-open");
+  modal.hidden = true;
+  state.predictionModalAction = null;
+  document.body.classList.remove("modal-open");
+}
+
+function bindPredictionNotificationModal() {
+  const modal = document.getElementById("prediction-modal");
+  if (!modal) {
+    return;
+  }
+  modal.querySelectorAll<HTMLElement>("[data-prediction-modal-close]").forEach((element) => {
+    element.addEventListener("click", () => closePredictionModal());
+  });
+  document.getElementById("prediction-modal-dismiss")?.addEventListener("click", () => closePredictionModal());
+  const action = document.getElementById("prediction-modal-action") as HTMLButtonElement | null;
+  action?.addEventListener("click", async () => {
+    const handler = state.predictionModalAction;
+    if (!handler) {
+      closePredictionModal();
+      return;
+    }
+    await withConfirmingElement(action, "Confirming", handler);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("is-open")) {
+      closePredictionModal();
+    }
+  });
+}
+
+function metricUnitLabel(metric: "hr" | "rr" | "steps") {
+  return metric === "rr" ? "ms" : metric === "steps" ? "steps" : "bpm";
+}
+
+function metricKeyForLabel(label: string): "hr" | "rr" | "steps" {
+  const normalized = label.toLowerCase();
+  if (normalized === "rr") return "rr";
+  if (normalized === "steps") return "steps";
+  return "hr";
+}
+
+function pickIntervalMarketByMetric(metric: "hr" | "rr" | "steps") {
+  switch (metric) {
+    case "hr": return state.intervalMarket;
+    case "rr": return state.rrIntervalMarket;
+    case "steps": return state.stepsIntervalMarket;
+  }
+}
+
+function activeIntervalReferenceForMetric(metric: "hr" | "rr" | "steps"): number | null {
+  const market = pickIntervalMarketByMetric(metric);
+  if (market) {
+    return market.referenceValue;
+  }
+  switch (metric) {
+    case "hr": return state.intervalReferenceBpm;
+    case "rr": return state.rrIntervalReferenceMs;
+    case "steps": return state.stepsIntervalReference;
+  }
+}
+
+function intervalMarketKey(metric: "hr" | "rr" | "steps", marketId: bigint) {
+  return `${metric}:${marketId.toString()}`;
+}
+
+function recordPendingPrediction(prediction: PendingPrediction) {
+  state.pendingPredictions.set(intervalMarketKey(prediction.metric, prediction.marketId), prediction);
+  state.lastSeenIntervalStatus.set(intervalMarketKey(prediction.metric, prediction.marketId), 0);
+  persistPendingPredictions();
+}
+
+type PersistedPendingPrediction = Omit<PendingPrediction, "marketId"> & { marketId: string };
+
+function persistPendingPredictions() {
+  try {
+    const payload: PersistedPendingPrediction[] = Array.from(state.pendingPredictions.values()).map((pending) => ({
+      ...pending,
+      marketId: pending.marketId.toString(),
+    }));
+    if (payload.length === 0) {
+      localStorage.removeItem(PENDING_PREDICTIONS_STORAGE_KEY);
+    } else {
+      localStorage.setItem(PENDING_PREDICTIONS_STORAGE_KEY, JSON.stringify(payload));
+    }
+  } catch {
+    // localStorage may be unavailable; ignore.
+  }
+}
+
+function restorePendingPredictions() {
+  try {
+    const raw = localStorage.getItem(PENDING_PREDICTIONS_STORAGE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw) as PersistedPendingPrediction[];
+    for (const entry of payload) {
+      const prediction: PendingPrediction = {
+        ...entry,
+        marketId: BigInt(entry.marketId),
+        notified: entry.notified ?? false,
+      };
+      state.pendingPredictions.set(intervalMarketKey(prediction.metric, prediction.marketId), prediction);
+      state.lastSeenIntervalStatus.set(intervalMarketKey(prediction.metric, prediction.marketId), 0);
+    }
+  } catch {
+    localStorage.removeItem(PENDING_PREDICTIONS_STORAGE_KEY);
+  }
+}
+
+function notifyPredictionPlaced(prediction: PendingPrediction) {
+  const sideLabel = prediction.isAbove ? t("trade.above") : t("trade.below");
+  const explorer = `${ARC_TESTNET_EXPLORER_URL}/tx/${prediction.txHash}`;
+  showPredictionModal({
+    kicker: t("modal.placed.kicker"),
+    title: `${prediction.amount} ${TRADING_UNIT_LABEL} on ${prediction.metricLabel} ${sideLabel}`,
+    body: t("modal.placed.body"),
+    meta: `Reference ${prediction.reference} ${prediction.unit} · Tx ${shortenHash(prediction.txHash)}`,
+    tone: "success",
+    link: { label: t("modal.viewtx"), href: explorer },
+  });
+}
+
+async function detectIntervalSettlements() {
+  if (!INTERVAL_MARKET_ADDRESS || state.pendingPredictions.size === 0) {
+    return;
+  }
+  const trader = activeTradingAddress();
+  for (const [key, pending] of Array.from(state.pendingPredictions.entries())) {
+    if (pending.notified) {
+      continue;
+    }
+    try {
+      const raw = await publicClient.readContract({
+        address: INTERVAL_MARKET_ADDRESS,
+        abi: parimutuelIntervalMarketAbi,
+        functionName: "markets",
+        args: [pending.marketId],
+      });
+      const status = Number(raw[9]);
+      state.lastSeenIntervalStatus.set(key, status);
+      if (status !== 1) {
+        continue;
+      }
+      let myAboveStake = 0n;
+      let myBelowStake = 0n;
+      let myClaimed = false;
+      if (trader) {
+        try {
+          const position = await publicClient.readContract({
+            address: INTERVAL_MARKET_ADDRESS,
+            abi: parimutuelIntervalMarketAbi,
+            functionName: "positions",
+            args: [pending.marketId, trader],
+          });
+          myAboveStake = position[0];
+          myBelowStake = position[1];
+          myClaimed = position[2];
+        } catch {
+          // tolerate transient read failures
+        }
+      }
+      const market: IntervalParimutuelMarketRecord = {
+        id: raw[0],
+        sessionIdHash: raw[1],
+        creator: raw[2],
+        intervalStartElapsedMs: raw[3],
+        intervalEndElapsedMs: raw[4],
+        tradingClosesAtTimestamp: raw[5],
+        referenceValue: Number(raw[6]),
+        signalType: Number(raw[7]),
+        createdAt: raw[8],
+        status,
+        settledOutcomeAbove: raw[10],
+        observedValue: raw[11],
+        settledAt: raw[12],
+        settledSampleElapsedMs: raw[13],
+        settledSampleSeq: Number(raw[14]),
+        totalAboveStake: raw[15],
+        totalBelowStake: raw[16],
+        myAboveStake,
+        myBelowStake,
+        myClaimed,
+        metric: pending.metric,
+      };
+      pending.notified = true;
+      notifyPredictionSettled(pending, market);
+    } catch (error) {
+      console.error("[settlement] poll failed for", key, error);
+    }
+  }
+}
+
+function notifyPredictionSettled(prediction: PendingPrediction, market: IntervalParimutuelMarketRecord) {
+  const userWon = prediction.isAbove === market.settledOutcomeAbove;
+  const winningStake = market.settledOutcomeAbove ? market.myAboveStake : market.myBelowStake;
+  const losingStake = market.settledOutcomeAbove ? market.myBelowStake : market.myAboveStake;
+  const winnerPool = market.settledOutcomeAbove ? market.totalAboveStake : market.totalBelowStake;
+  const loserPool = market.settledOutcomeAbove ? market.totalBelowStake : market.totalAboveStake;
+  const refundScenario = winnerPool === 0n;
+  const grossPayout = userWon && winnerPool > 0n
+    ? winningStake + (loserPool * winningStake) / winnerPool
+    : refundScenario
+      ? winningStake + losingStake
+      : 0n;
+  const profit = grossPayout - (winningStake + losingStake);
+  const balanceChange = userWon || refundScenario
+    ? Number(formatUnits(profit, TRADING_UNIT_DECIMALS))
+    : -Number(formatUnits(losingStake, TRADING_UNIT_DECIMALS));
+  const balanceChangeLabel = `${balanceChange >= 0 ? "+" : ""}${balanceChange.toFixed(2)} ${TRADING_UNIT_LABEL}`;
+  const observed = `${market.observedValue.toString()} ${prediction.unit}`;
+  const sideLabel = prediction.isAbove ? "Above" : "Below";
+  const outcomeLabel = market.settledOutcomeAbove ? "Above" : "Below";
+  if (userWon || refundScenario) {
+    const grossLabel = Number(formatUnits(grossPayout, TRADING_UNIT_DECIMALS)).toFixed(2);
+    showPredictionModal({
+      kicker: prediction.metricLabel,
+      title: refundScenario ? t("modal.refund") : t("modal.won"),
+      body: refundScenario
+        ? `No counter-stake on the other side. Claim your ${prediction.amount} ${TRADING_UNIT_LABEL} back.`
+        : `Settled ${outcomeLabel} at ${observed}. You staked ${prediction.amount} on ${sideLabel} and earned ${balanceChangeLabel}.`,
+      meta: `Gross payout ${grossLabel} ${TRADING_UNIT_LABEL} · pending claim`,
+      tone: "success",
+      action: {
+        label: t("modal.claim"),
+        handler: async () => {
+          await claimIntervalMarket(market.id, prediction.metric);
+          state.pendingPredictions.delete(intervalMarketKey(prediction.metric, prediction.marketId));
+          persistPendingPredictions();
+          closePredictionModal();
+        },
+      },
+    });
+  } else {
+    showPredictionModal({
+      kicker: prediction.metricLabel,
+      title: t("modal.lost"),
+      body: `Settled ${outcomeLabel} at ${observed}. Your ${sideLabel} wager of ${prediction.amount} ${TRADING_UNIT_LABEL} didn't hit.`,
+      meta: `Balance change ${balanceChangeLabel}`,
+      tone: "warning",
+    });
+    state.pendingPredictions.delete(intervalMarketKey(prediction.metric, prediction.marketId));
+    persistPendingPredictions();
+  }
+}
+
 function bindStaticHandlers() {
+  bindClick("lang-toggle", () => {
+    currentLang = currentLang === "en" ? "es" : "en";
+    localStorage.setItem(LANG_STORAGE_KEY, currentLang);
+    const btn = document.getElementById("lang-toggle");
+    if (btn) btn.textContent = currentLang === "en" ? "ES" : "EN";
+    translatePage();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    const menu = document.querySelector<HTMLDetailsElement>(".account-menu");
+    if (menu?.open && !menu.contains(event.target as Node)) {
+      menu.removeAttribute("open");
+    }
+  }, { capture: true });
+  bindClick("landing-get-started", () => openPrivyLoginModal());
+  bindClick("privy-login-button", () => openPrivyLoginModal());
+  bindClick("privy-logout-button", () => logoutSpectator());
+  bindClick("leaderboard-open-button", () => {
+    document.querySelector<HTMLDetailsElement>(".account-menu")?.removeAttribute("open");
+    const overlay = document.querySelector<HTMLElement>("#leaderboard-overlay");
+    if (overlay) { overlay.hidden = false; void fetchAndRenderLeaderboard(); }
+  });
+  bindClick("leaderboard-close-button", () => {
+    const overlay = document.querySelector<HTMLElement>("#leaderboard-overlay");
+    if (overlay) overlay.hidden = true;
+  });
+  document.addEventListener("pointerdown", (e) => {
+    const overlay = document.querySelector<HTMLElement>("#leaderboard-overlay");
+    const card = overlay?.querySelector(".leaderboard-card");
+    if (overlay && !overlay.hidden && card && !card.contains(e.target as Node)) {
+      overlay.hidden = true;
+    }
+  }, { capture: true });
+  bindClick("spectator-login-open", () => openPrivyLoginModal());
+  bindClick("spectator-reset", () => clearSpectatorSession());
+  bindPrivyLoginModal();
+  bindPredictionNotificationModal();
   bindClick("connect-wallet", () => connectWallet());
   bindClick("switch-chain", () => switchToConfiguredChain());
+  bindClick("refresh-admin-trades", () => refreshAdminTrades());
   bindClick("save-youtube", () => saveYoutubeUrl());
   bindClick("approve-button", () => approveTokens());
   bindClick("faucet-claim", () => claimFaucet());
@@ -1009,26 +1869,26 @@ function bindStaticHandlers() {
   bindClick("resolve-market", () => resolveSelectedMarket());
   bindClick("interval-side-above", () => setIntervalSide("above"));
   bindClick("interval-side-below", () => setIntervalSide("below"));
-  bindClick("interval-add-1", () => nudgeIntervalStake(1));
-  bindClick("interval-add-5", () => nudgeIntervalStake(5));
-  bindClick("interval-add-10", () => nudgeIntervalStake(10));
-  bindClick("interval-max", () => setIntervalStakeToMax());
+  bindClick("interval-add-1", () => nudgeIntervalStake(25));
+  bindClick("interval-add-5", () => nudgeIntervalStake(100));
+  bindClick("interval-add-10", () => nudgeIntervalStake(250));
+  bindClick("interval-add-500", () => nudgeIntervalStake(500));
   bindClick("interval-trade-submit", () => submitIntervalTrade());
   bindInput("interval-trade-amount", () => renderIntervalTradePanel());
   bindClick("rr-interval-side-above", () => setRrIntervalSide("above"));
   bindClick("rr-interval-side-below", () => setRrIntervalSide("below"));
-  bindClick("rr-interval-add-1", () => nudgeRrIntervalStake(1));
-  bindClick("rr-interval-add-5", () => nudgeRrIntervalStake(5));
-  bindClick("rr-interval-add-10", () => nudgeRrIntervalStake(10));
+  bindClick("rr-interval-add-1", () => nudgeRrIntervalStake(25));
+  bindClick("rr-interval-add-5", () => nudgeRrIntervalStake(100));
+  bindClick("rr-interval-add-10", () => nudgeRrIntervalStake(250));
   bindClick("rr-interval-max", () => setRrIntervalStakeToMax());
   bindClick("rr-interval-trade-submit", () => submitRrIntervalTrade());
   bindInput("rr-interval-trade-amount", () => renderRrIntervalTradePanel());
   bindClick("steps-interval-side-above", () => setStepsIntervalSide("above"));
   bindClick("steps-interval-side-below", () => setStepsIntervalSide("below"));
-  bindClick("steps-interval-add-1", () => nudgeStepsIntervalStake(1));
-  bindClick("steps-interval-add-5", () => nudgeStepsIntervalStake(5));
-  bindClick("steps-interval-add-10", () => nudgeStepsIntervalStake(10));
-  bindClick("steps-interval-max", () => setStepsIntervalStakeToMax());
+  bindClick("steps-interval-add-1", () => nudgeStepsIntervalStake(25));
+  bindClick("steps-interval-add-5", () => nudgeStepsIntervalStake(100));
+  bindClick("steps-interval-add-10", () => nudgeStepsIntervalStake(250));
+  bindClick("steps-interval-add-500", () => nudgeStepsIntervalStake(500));
   bindClick("steps-interval-trade-submit", () => submitStepsIntervalTrade());
   bindInput("steps-interval-trade-amount", () => renderStepsIntervalTradePanel());
 }
@@ -1089,15 +1949,515 @@ function setupContainerMotion() {
 
 async function restoreWallet() {
   if (!window.ethereum) {
-    setStatus("No injected wallet detected", "warning");
     return;
   }
-
   const accounts = (await window.ethereum.request({ method: "eth_accounts" })) as string[];
   if (accounts.length > 0) {
     state.account = accounts[0] as Address;
     attachWalletListeners();
   }
+}
+
+async function restoreSpectatorSession() {
+  const cached = readCachedSpectatorSession();
+  const authToken = localStorage.getItem(SPECTATOR_AUTH_TOKEN_STORAGE_KEY) ?? cached?.authToken ?? null;
+  if (cached && (!authToken || cached.authToken === authToken)) {
+    applySpectatorSession(cached);
+    localStorage.setItem(SPECTATOR_AUTH_TOKEN_STORAGE_KEY, cached.authToken);
+    renderWallet();
+  }
+  if (!authToken) {
+    return;
+  }
+  try {
+    const response = await fetch(apiUrl("/api/spectators/me"), {
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+    if (response.status === 401 || response.status === 403) {
+      clearSpectatorSession({ refreshWallet: false });
+      return;
+    }
+    const payload = await readJson<SpectatorSession>(response, "Email wallet session expired.");
+    applySpectatorSession(payload);
+    cacheSpectatorSession(state.spectator);
+    renderWallet();
+  } catch (error) {
+    if (!state.spectator) {
+      console.warn("[spectator] session restore failed without a cached account:", error);
+    }
+  }
+}
+
+function readCachedSpectatorSession() {
+  try {
+    const raw = localStorage.getItem(SPECTATOR_SESSION_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    return normalizeSpectatorSession(JSON.parse(raw));
+  } catch {
+    localStorage.removeItem(SPECTATOR_SESSION_STORAGE_KEY);
+    return null;
+  }
+}
+
+function normalizeSpectatorSession(value: unknown): SpectatorSession | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<SpectatorSession>;
+  if (
+    typeof candidate.spectatorId !== "string" ||
+    typeof candidate.email !== "string" ||
+    typeof candidate.authToken !== "string" ||
+    typeof candidate.walletAddress !== "string"
+  ) {
+    return null;
+  }
+  return {
+    ...candidate,
+    spectatorId: candidate.spectatorId,
+    email: candidate.email,
+    authToken: candidate.authToken,
+    walletAddress: getAddress(candidate.walletAddress),
+    provider: "local",
+  };
+}
+
+function applySpectatorSession(payload: SpectatorSession) {
+  state.spectator = {
+    ...payload,
+    walletAddress: getAddress(payload.walletAddress),
+  };
+  localStorage.setItem(SPECTATOR_AUTH_TOKEN_STORAGE_KEY, state.spectator.authToken);
+}
+
+function cacheSpectatorSession(session: SpectatorSession | null) {
+  if (!session) {
+    localStorage.removeItem(SPECTATOR_SESSION_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(SPECTATOR_SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+async function getPrivyClient() {
+  if (!PRIVY_APP_ID) {
+    throw new Error("Privy app id is not configured.");
+  }
+  privyClientPromise ??= (async () => {
+    const client = new Privy({
+      appId: PRIVY_APP_ID,
+      storage: new LocalStorage(),
+    });
+    await client.initialize();
+    return client;
+  })();
+  return privyClientPromise;
+}
+
+function openPrivyLoginModal() {
+  if (state.spectator && !state.account) {
+    setStatus(`Login wallet is already active for ${state.spectator.email}.`, "success");
+    return;
+  }
+  if (!PRIVY_APP_ID) {
+    setStatus("Privy app id is not configured.", "error");
+    return;
+  }
+  const modal = document.getElementById("privy-login-modal");
+  if (!modal) {
+    return;
+  }
+  modal.hidden = false;
+  modal.classList.add("is-open");
+  resetPrivyEmailStep();
+  setPrivyModalStatus("Enter your email or pick a provider.");
+  document.body.classList.add("modal-open");
+  const emailInput = document.getElementById("privy-modal-email-input") as HTMLInputElement | null;
+  emailInput?.focus();
+}
+
+function closePrivyLoginModal() {
+  const modal = document.getElementById("privy-login-modal");
+  if (!modal) {
+    return;
+  }
+  modal.classList.remove("is-open");
+  modal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function setPrivyModalStatus(message: string, tone: "neutral" | "error" = "neutral") {
+  const status = document.getElementById("privy-modal-status");
+  if (!status) {
+    return;
+  }
+  status.textContent = message;
+  status.dataset.tone = tone;
+}
+
+function bindPrivyLoginModal() {
+  const modal = document.getElementById("privy-login-modal");
+  if (!modal) {
+    return;
+  }
+  modal.querySelectorAll<HTMLElement>("[data-privy-modal-close]").forEach((element) => {
+    element.addEventListener("click", () => closePrivyLoginModal());
+  });
+  modal.querySelectorAll<HTMLButtonElement>("[data-privy-provider]").forEach((button) => {
+    const providerId = button.dataset.privyProvider as OAuthProviderID | undefined;
+    if (!providerId || !PRIVY_OAUTH_PROVIDER_IDS.has(providerId)) {
+      return;
+    }
+    button.addEventListener("click", () => {
+      void startPrivyLogin(providerId).catch((error: unknown) => {
+        const message = userFacingErrorMessage(error, "Could not start the login flow.");
+        setPrivyModalStatus(message, "error");
+        setStatus(message, "error");
+      });
+    });
+  });
+  const emailForm = document.getElementById("privy-modal-email-form") as HTMLFormElement | null;
+  emailForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const step = emailForm.dataset.step ?? "request";
+    if (step === "request") {
+      const emailInput = document.getElementById("privy-modal-email-input") as HTMLInputElement | null;
+      const emailValue = emailInput?.value.trim().toLowerCase() ?? "";
+      if (!emailValue || !emailValue.includes("@")) {
+        setPrivyModalStatus("Enter a valid email address.", "error");
+        emailInput?.focus();
+        return;
+      }
+      void sendPrivyEmailCode(emailValue).catch((error: unknown) => {
+        console.error("[privy] sendCode failed:", error);
+        const message = userFacingErrorMessage(error, "Could not send login code.");
+        setPrivyModalStatus(message, "error");
+        setPrivyEmailBusy(false);
+      });
+    } else {
+      const codeInput = document.getElementById("privy-modal-code-input") as HTMLInputElement | null;
+      const codeValue = codeInput?.value.trim() ?? "";
+      if (!codeValue) {
+        setPrivyModalStatus("Enter the code from your email.", "error");
+        codeInput?.focus();
+        return;
+      }
+      void completePrivyEmailLogin(codeValue).catch((error: unknown) => {
+        console.error("[privy] loginWithCode failed:", error);
+        const message = userFacingErrorMessage(error, "Could not verify that login code.");
+        setPrivyModalStatus(message, "error");
+        setPrivyEmailBusy(false);
+      });
+    }
+  });
+  const backButton = document.getElementById("privy-modal-code-back");
+  backButton?.addEventListener("click", () => {
+    resetPrivyEmailStep();
+    setPrivyModalStatus("Enter your email or pick a provider.");
+    const emailInput = document.getElementById("privy-modal-email-input") as HTMLInputElement | null;
+    emailInput?.focus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("is-open")) {
+      closePrivyLoginModal();
+    }
+  });
+}
+
+async function startPrivyLogin(provider: OAuthProviderID = DEFAULT_PRIVY_OAUTH_PROVIDER) {
+  if (state.spectator && !state.account) {
+    setStatus(`Login wallet is already active for ${state.spectator.email}.`, "success");
+    closePrivyLoginModal();
+    return;
+  }
+  const client = await getPrivyClient();
+  const redirectUri = `${window.location.origin}${window.location.pathname}`;
+  localStorage.setItem(PRIVY_OAUTH_PROVIDER_STORAGE_KEY, provider);
+  const providerLabel = privyProviderLabel(provider);
+  setPrivyModalStatus(`Opening ${providerLabel}…`);
+  setStatus(`Opening ${providerLabel}…`);
+  const { url } = await client.auth.oauth.generateURL(provider, redirectUri);
+  window.location.assign(url);
+}
+
+function privyProviderLabel(provider: OAuthProviderID) {
+  switch (provider) {
+    case "google":
+      return "Google login";
+    case "github":
+      return "GitHub login";
+    case "twitter":
+      return "X login";
+    default:
+      return "Privy login";
+  }
+}
+
+let pendingPrivyEmail: string | null = null;
+
+function resetPrivyEmailStep() {
+  pendingPrivyEmail = null;
+  const form = document.getElementById("privy-modal-email-form") as HTMLFormElement | null;
+  if (form) {
+    form.dataset.step = "request";
+  }
+  const request = form?.querySelector<HTMLElement>('[data-step-panel="request"]');
+  const verify = form?.querySelector<HTMLElement>('[data-step-panel="verify"]');
+  if (request) request.hidden = false;
+  if (verify) verify.hidden = true;
+  const emailInput = document.getElementById("privy-modal-email-input") as HTMLInputElement | null;
+  if (emailInput) emailInput.value = "";
+  const codeInput = document.getElementById("privy-modal-code-input") as HTMLInputElement | null;
+  if (codeInput) codeInput.value = "";
+  setPrivyEmailBusy(false);
+}
+
+function setPrivyEmailBusy(busy: boolean) {
+  const form = document.getElementById("privy-modal-email-form") as HTMLFormElement | null;
+  if (!form) return;
+  form.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((element) => {
+    element.disabled = busy;
+  });
+  document.querySelectorAll<HTMLButtonElement>(".privy-modal-provider").forEach((button) => {
+    if (busy) {
+      button.setAttribute("aria-busy", "true");
+    } else {
+      button.removeAttribute("aria-busy");
+    }
+  });
+}
+
+async function sendPrivyEmailCode(email: string) {
+  if (state.spectator && !state.account) {
+    setStatus(`Login wallet is already active for ${state.spectator.email}.`, "success");
+    closePrivyLoginModal();
+    return;
+  }
+  setPrivyEmailBusy(true);
+  setPrivyModalStatus("Sending login code…");
+  const client = await getPrivyClient();
+  await client.auth.email.sendCode(email);
+  pendingPrivyEmail = email;
+  const form = document.getElementById("privy-modal-email-form") as HTMLFormElement | null;
+  if (form) form.dataset.step = "verify";
+  const request = form?.querySelector<HTMLElement>('[data-step-panel="request"]');
+  const verify = form?.querySelector<HTMLElement>('[data-step-panel="verify"]');
+  if (request) request.hidden = true;
+  if (verify) verify.hidden = false;
+  const target = document.getElementById("privy-modal-email-target");
+  if (target) target.textContent = email;
+  setPrivyEmailBusy(false);
+  setPrivyModalStatus(`Code sent to ${email}. Check your inbox.`);
+  const codeInput = document.getElementById("privy-modal-code-input") as HTMLInputElement | null;
+  codeInput?.focus();
+}
+
+async function completePrivyEmailLogin(code: string) {
+  if (!pendingPrivyEmail) {
+    setPrivyModalStatus("Request a new code to continue.", "error");
+    resetPrivyEmailStep();
+    return;
+  }
+  setPrivyEmailBusy(true);
+  setPrivyModalStatus("Verifying login code…");
+  const client = await getPrivyClient();
+  const { user } = await client.auth.email.loginWithCode(
+    pendingPrivyEmail,
+    code,
+    "login-or-sign-up",
+  );
+  const identifier = extractPrivyEmail(user) ?? pendingPrivyEmail;
+  pendingPrivyEmail = null;
+  setPrivyModalStatus("Funding your wallet…");
+  await provisionSpectatorSession(identifier, "email");
+}
+
+async function handlePrivyOAuthCallback() {
+  if (isAdminRoute || !PRIVY_APP_ID) {
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const authorizationCode = params.get("privy_oauth_code") ?? params.get("code");
+  const returnedStateCode = params.get("privy_oauth_state") ?? params.get("state") ?? params.get("state_code");
+  if (!authorizationCode || !returnedStateCode) {
+    return;
+  }
+
+  const callbackProvider = params.get("privy_oauth_provider") as OAuthProviderID | null;
+  const storedProvider = localStorage.getItem(PRIVY_OAUTH_PROVIDER_STORAGE_KEY) as OAuthProviderID | null;
+  const provider: OAuthProviderID = callbackProvider && PRIVY_OAUTH_PROVIDER_IDS.has(callbackProvider)
+    ? callbackProvider
+    : storedProvider && PRIVY_OAUTH_PROVIDER_IDS.has(storedProvider)
+    ? storedProvider
+    : DEFAULT_PRIVY_OAUTH_PROVIDER;
+  removePrivyCallbackParams(params);
+  setStatus(`Completing ${privyProviderLabel(provider)}…`);
+  try {
+    const client = await getPrivyClient();
+    const { user } = await client.auth.oauth.loginWithCode(
+      authorizationCode,
+      returnedStateCode,
+      provider,
+      "raw",
+      "login-or-sign-up",
+    );
+    localStorage.removeItem(PRIVY_OAUTH_PROVIDER_STORAGE_KEY);
+    const identifier = extractPrivyUserIdentifier(user, provider);
+    if (!identifier) {
+      throw new Error("Privy login completed, but no user identifier was returned. Check Privy dashboard scopes for this provider.");
+    }
+    await provisionSpectatorSession(identifier, "Privy");
+  } catch (error) {
+    console.error("[privy] OAuth callback failed:", error);
+    setStatus(userFacingErrorMessage(error, "Login could not be completed."), "error");
+  }
+}
+
+function removePrivyCallbackParams(params: URLSearchParams) {
+  for (const key of [
+    "code",
+    "state",
+    "state_code",
+    "scope",
+    "authuser",
+    "prompt",
+    "privy_oauth_code",
+    "privy_oauth_state",
+    "privy_oauth_provider",
+  ]) {
+    params.delete(key);
+  }
+  const nextSearch = params.toString();
+  const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash}`;
+  window.history.replaceState({}, document.title, nextUrl);
+}
+
+function extractPrivyEmail(user: PrivyUserLike) {
+  for (const account of user.linked_accounts) {
+    if ("email" in account && typeof account.email === "string" && account.email.includes("@")) {
+      return account.email.trim().toLowerCase();
+    }
+    if (account.type === "email" && "address" in account && typeof account.address === "string") {
+      return account.address.trim().toLowerCase();
+    }
+  }
+  return null;
+}
+
+const PRIVY_OAUTH_ACCOUNT_TYPES = new Set<string>([
+  "google_oauth",
+  "github_oauth",
+  "twitter_oauth",
+]);
+
+function extractPrivyUserIdentifier(user: PrivyUserLike, provider: OAuthProviderID) {
+  const email = extractPrivyEmail(user);
+  if (email) {
+    return email;
+  }
+  const oauthType = `${provider}_oauth`;
+  const oauthAccount = user.linked_accounts.find(
+    (account) => typeof account.type === "string" && account.type === oauthType,
+  );
+  const subject = oauthAccount && typeof oauthAccount.subject === "string"
+    ? oauthAccount.subject
+    : null;
+  if (subject) {
+    return `${provider}-${subject}@privy.local`.toLowerCase();
+  }
+  const fallback = user.linked_accounts.find(
+    (account) => typeof account.type === "string" && PRIVY_OAUTH_ACCOUNT_TYPES.has(account.type) && typeof account.subject === "string",
+  );
+  if (fallback && typeof fallback.subject === "string" && typeof fallback.type === "string") {
+    const providerPrefix = fallback.type.replace(/_oauth$/, "");
+    return `${providerPrefix}-${fallback.subject}@privy.local`.toLowerCase();
+  }
+  return null;
+}
+
+async function provisionSpectatorSession(email: string, source: "Privy" | "email") {
+  setBusy("spectator-onboard", true);
+  setBusy("privy-login-button", true);
+  setPrivyModalStatus("Funding your wallet…");
+  try {
+    const response = await fetch(apiUrl("/api/spectators/onboard"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email }),
+    });
+    const payload = await readJson<SpectatorSession>(response, "Couldn't create your login wallet.");
+    applySpectatorSession(payload);
+    cacheSpectatorSession(state.spectator);
+    setStatus(`${source} login complete. ${payload.fundedAmountFormatted ?? SPECTATOR_STARTING_POINTS.toString()} ${TRADING_UNIT_LABEL} ready.`, "success");
+    closePrivyLoginModal();
+    await enterAuthenticatedExperience();
+  } catch (error) {
+    const message = userFacingErrorMessage(error, `Couldn't start the ${source === "Privy" ? "Privy" : "email"} wallet flow.`);
+    setStatus(message, "error");
+    setPrivyModalStatus(message, "error");
+  } finally {
+    setBusy("spectator-onboard", false);
+    setBusy("privy-login-button", false);
+  }
+}
+
+function clearSpectatorSession(options: { refreshWallet?: boolean } = {}) {
+  const { refreshWallet = true } = options;
+  state.spectator = null;
+  localStorage.removeItem(SPECTATOR_AUTH_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(SPECTATOR_SESSION_STORAGE_KEY);
+  state.balance = 0n;
+  state.thresholdAllowance = 0n;
+  state.intervalAllowance = 0n;
+  state.allowance = 0n;
+  state.pendingPredictions.clear();
+  state.spectatorTrades = [];
+  state.lastSeenIntervalStatus.clear();
+  renderWallet();
+  if (refreshWallet) {
+    void refreshWalletState();
+  }
+}
+
+function logoutSpectator() {
+  if (!state.spectator) {
+    return;
+  }
+  setStatus("Logged out", "success");
+  clearSpectatorSession();
+  renderLandingExperience();
+}
+
+async function spectatorRequest<T>(path: string, body: Record<string, unknown>) {
+  if (!state.spectator) {
+    throw new Error("Email wallet session not found");
+  }
+  const response = await fetch(apiUrl(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.spectator.authToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+  return readJson<T>(response, "Email wallet request failed.");
+}
+
+async function spectatorGet<T>(path: string) {
+  if (!state.spectator) {
+    throw new Error("Email wallet session not found");
+  }
+  const response = await fetch(apiUrl(path), {
+    headers: {
+      Authorization: `Bearer ${state.spectator.authToken}`,
+    },
+  });
+  return readJson<T>(response, "Email wallet request failed.");
 }
 
 async function connectWallet() {
@@ -1154,29 +2514,156 @@ function attachWalletListeners() {
   });
 }
 
-async function refreshData() {
-  const tasks = [
-    refreshSessions(),
-    refreshMarketMeta(),
-    refreshIntervalMarketRegistry(),
-    refreshMarkets(),
-    refreshWalletState(),
-    refreshFaucet(),
-  ];
-  const results = await Promise.allSettled(tasks);
-  const rejected = results.find((result) => result.status === "rejected");
-  await refreshIntervalExperience().catch(() => {
-    // Keep the page usable even if interval hydration fails once.
-  });
-  await refreshRrIntervalExperience().catch(() => {
-    // Keep the page usable even if RR interval hydration fails once.
-  });
-  await refreshStepsIntervalExperience().catch(() => {
-    // Keep the page usable even if steps interval hydration fails once.
-  });
-  if (rejected?.status === "rejected") {
-    throw rejected.reason;
+async function refreshData(options: { forceOnchain?: boolean; forceAdminTrades?: boolean } = {}) {
+  try {
+    const refreshOnchain = shouldRefreshOnchain(options.forceOnchain);
+    const refreshTradeFeed = shouldRefreshAdminTrades(options.forceAdminTrades);
+    await hydrateCurrentSessionFast().catch(() => {
+      // Keep the fast path best-effort. The slower session list can still fill in.
+    });
+    const sessionTask = refreshSessions();
+    const registryTask = refreshIntervalMarketRegistry();
+    const walletTask = refreshOnchain ? refreshWalletState() : Promise.resolve();
+    const faucetTask = refreshFaucet();
+    const metaTask = refreshMarketMeta();
+    const eagerResults = await Promise.allSettled([registryTask, walletTask, faucetTask]);
+    const eagerRejected = eagerResults.find((result) => result.status === "rejected");
+    await refreshIntervalExperience({ refreshOnchain }).catch(() => {
+      // Keep the page usable even if interval hydration fails once.
+    });
+    if (SHOW_RR_INTERVAL_EXPERIENCE) {
+      await refreshRrIntervalExperience({ refreshOnchain }).catch(() => {
+        // Keep the page usable even if RR interval hydration fails once.
+      });
+    }
+    await refreshStepsIntervalExperience({ refreshOnchain }).catch(() => {
+      // Keep the page usable even if steps interval hydration fails once.
+    });
+    await refreshSpectatorTrades().catch(() => {
+      // Local pending predictions and onchain positions still render if the trade ledger read flakes.
+    });
+    const deferredResults = await Promise.allSettled([sessionTask, metaTask]);
+    const deferredRejected = deferredResults.find((result) => result.status === "rejected");
+    if (refreshOnchain) {
+      await refreshMarkets().catch(() => {
+        // Live telemetry should keep flowing even if the threshold board read fails once.
+      });
+      state.lastOnchainRefreshAt = Date.now();
+    } else {
+      renderMarkets();
+    }
+    if (eagerRejected?.status === "rejected") {
+      throw eagerRejected.reason;
+    }
+    if (deferredRejected?.status === "rejected") {
+      throw deferredRejected.reason;
+    }
+    if (isAdminRoute && refreshTradeFeed) {
+      await refreshAdminTrades();
+    }
+    state.lastRefreshAt = new Date();
+    state.refreshFailureCount = 0;
+  } catch (error) {
+    state.refreshFailureCount += 1;
+    renderStreamHealth();
+    throw error;
   }
+  renderStreamHealth();
+  renderSettlementTrail();
+}
+
+function shouldRefreshOnchain(force = false) {
+  return force || state.lastOnchainRefreshAt === 0 || Date.now() - state.lastOnchainRefreshAt >= ONCHAIN_REFRESH_INTERVAL_MS;
+}
+
+function shouldRefreshAdminTrades(force = false) {
+  return force || state.lastAdminTradesRefreshAt === 0 || Date.now() - state.lastAdminTradesRefreshAt >= ADMIN_TRADES_REFRESH_INTERVAL_MS;
+}
+
+function applySessionsState(sessions: TelemetrySession[], currentSession: TelemetrySession | null = null) {
+  const visibleSessions = sessions.filter((session) => {
+    if ((session.sampleCount ?? 0) <= 0 && session.status !== "active") {
+      return false;
+    }
+    return session.notes !== "Auto-recovered from sample upload";
+  });
+  const sortedSessions = sessions
+    .filter((session) => visibleSessions.includes(session))
+    .sort((left, right) => {
+      const leftActive = left.status === "active" ? 1 : 0;
+      const rightActive = right.status === "active" ? 1 : 0;
+      if (leftActive !== rightActive) {
+        return rightActive - leftActive;
+      }
+      const leftSampleTime = Date.parse(left.lastSampleAt ?? left.createdAt);
+      const rightSampleTime = Date.parse(right.lastSampleAt ?? right.createdAt);
+      if (leftSampleTime !== rightSampleTime) {
+        return rightSampleTime - leftSampleTime;
+      }
+      return (right.sampleCount ?? 0) - (left.sampleCount ?? 0);
+    });
+  const freshestSortedSession = sortedSessions[0] ?? null;
+  const preferCurrentSession = currentSession && (
+    !freshestSortedSession ||
+    Date.parse(currentSession.lastSampleAt ?? currentSession.createdAt) >=
+      Date.parse(freshestSortedSession.lastSampleAt ?? freshestSortedSession.createdAt)
+  );
+  state.sessions = preferCurrentSession && currentSession
+    ? [currentSession, ...sortedSessions.filter((session) => session.sessionId !== currentSession.sessionId)]
+    : sortedSessions;
+  const preferredSession = state.preferredSessionId
+    ? state.sessions.find((session) => session.sessionId === state.preferredSessionId) ?? null
+    : null;
+  const nextSessionId = preferredSession?.sessionId ?? state.sessions[0]?.sessionId ?? null;
+  if (nextSessionId !== state.currentSessionId) {
+    state.currentSessionId = nextSessionId;
+    state.preferredSessionId = nextSessionId;
+    if (nextSessionId) {
+      localStorage.setItem(PREFERRED_SESSION_STORAGE_KEY, nextSessionId);
+    }
+    state.selectedIntervalStartMs = null;
+    state.intervalSamples = [];
+    state.intervalReferenceBpm = null;
+    state.intervalCurrentBpm = null;
+    state.intervalViewRange = null;
+    state.intervalMarket = null;
+    state.rrSelectedIntervalStartMs = null;
+    state.rrIntervalSamples = [];
+    state.rrIntervalReferenceMs = null;
+    state.rrIntervalCurrentMs = null;
+    state.rrIntervalViewRange = null;
+    state.rrIntervalMarket = null;
+    state.stepsSelectedIntervalStartMs = null;
+    state.stepsIntervalSamples = [];
+    state.stepsIntervalReference = null;
+    state.stepsIntervalCurrent = null;
+    state.stepsIntervalViewRange = null;
+    state.stepsIntervalMarket = null;
+    state.rrDistributionValues = [];
+    state.rrDistributionPrevSessionId = null;
+  }
+  renderSessionOptions();
+}
+
+async function hydrateCurrentSessionFast() {
+  if (isAdminRoute) {
+    return;
+  }
+  const response = await fetch(apiUrl("/api/cre/sessions/current")).catch(() => null);
+  if (!response?.ok) {
+    return;
+  }
+  const currentSession = await readJson<TelemetrySession>(
+    response,
+    "Current session data is temporarily unavailable.",
+  );
+  const existingSessions = state.sessions.length > 0
+    ? state.sessions.map((session) => session.sessionId === currentSession.sessionId ? { ...session, ...currentSession } : session)
+    : [currentSession];
+  if (!existingSessions.some((session) => session.sessionId === currentSession.sessionId)) {
+    existingSessions.unshift(currentSession);
+  }
+  applySessionsState(existingSessions, currentSession);
 }
 
 async function refreshSessions() {
@@ -1200,55 +2687,7 @@ async function refreshSessions() {
       ? { ...matchingSummary, ...currentPayload }
       : currentPayload;
   }
-  const visibleSessions = sessions.filter((session) => {
-    if ((session.sampleCount ?? 0) <= 0 && session.status !== "active") {
-      return false;
-    }
-    return session.notes !== "Auto-recovered from sample upload";
-  });
-  const sortedSessions = sessions
-    .filter((session) => visibleSessions.includes(session))
-    .sort((left, right) => {
-      const leftActive = left.status === "active" ? 1 : 0;
-      const rightActive = right.status === "active" ? 1 : 0;
-      if (leftActive !== rightActive) {
-        return rightActive - leftActive;
-      }
-      const leftSampleTime = Date.parse(left.lastSampleAt ?? left.createdAt);
-      const rightSampleTime = Date.parse(right.lastSampleAt ?? right.createdAt);
-      if (leftSampleTime !== rightSampleTime) {
-        return rightSampleTime - leftSampleTime;
-      }
-      return (right.sampleCount ?? 0) - (left.sampleCount ?? 0);
-    });
-  state.sessions = currentSession
-    ? [currentSession, ...sortedSessions.filter((session) => session.sessionId !== currentSession?.sessionId)]
-    : sortedSessions;
-  const nextSessionId = state.sessions[0]?.sessionId ?? null;
-  if (nextSessionId !== state.currentSessionId) {
-    state.currentSessionId = nextSessionId;
-    state.selectedIntervalStartMs = null;
-    state.intervalSamples = [];
-    state.intervalReferenceBpm = null;
-    state.intervalCurrentBpm = null;
-    state.intervalViewRange = null;
-    state.intervalMarket = null;
-    state.rrSelectedIntervalStartMs = null;
-    state.rrIntervalSamples = [];
-    state.rrIntervalReferenceMs = null;
-    state.rrIntervalCurrentMs = null;
-    state.rrIntervalViewRange = null;
-    state.rrIntervalMarket = null;
-    state.stepsSelectedIntervalStartMs = null;
-    state.stepsIntervalSamples = [];
-    state.stepsIntervalReference = null;
-    state.stepsIntervalCurrent = null;
-    state.stepsIntervalViewRange = null;
-    state.stepsIntervalMarket = null;
-    state.rrDistributionValues = [];
-    state.rrDistributionPrevSessionId = null;
-  }
-  renderSessionOptions();
+  applySessionsState(sessions, currentSession);
 }
 
 async function refreshFaucet() {
@@ -1277,9 +2716,125 @@ async function refreshIntervalMarketRegistry() {
   state.intervalMarketRegistry = payload.markets ?? [];
 }
 
+async function refreshAdminTrades() {
+  if (!isAdminRoute) {
+    return;
+  }
+  const adminToken = getAdminApiToken();
+  if (!adminToken) {
+    state.adminTradesStatus = "error";
+    state.adminTradesError = "Enter the admin API key to load the trade feed.";
+    renderAdminTrades();
+    return;
+  }
+  state.adminTradesStatus = state.adminTrades.length > 0 ? "ready" : "loading";
+  state.adminTradesError = null;
+  renderAdminTrades();
+  try {
+    const response = await fetch(apiUrl("/api/admin/trades?limit=500"), {
+      headers: {
+        "X-Admin-Token": adminToken,
+      },
+    });
+    if (response.status === 401 || response.status === 403) {
+      sessionStorage.removeItem(ADMIN_API_KEY_STORAGE_KEY);
+      throw new Error("Admin API key was rejected.");
+    }
+    const payload = await readJson<{ trades: AdminTradeRecord[] }>(
+      response,
+      "Trade feed is temporarily unavailable.",
+    );
+    state.adminTrades = payload.trades ?? [];
+    state.adminTradesStatus = "ready";
+    state.lastAdminTradesRefreshAt = Date.now();
+  } catch (error) {
+    state.adminTradesStatus = "error";
+    state.adminTradesError = userFacingErrorMessage(error, "Couldn't load user trades.");
+  }
+  renderAdminTrades();
+}
+
+async function refreshSpectatorTrades() {
+  if (isAdminRoute || !state.spectator) {
+    state.spectatorTrades = [];
+    renderAccountOpenPositions();
+    return;
+  }
+  const payload = await spectatorGet<{ trades: SpectatorTradeRecord[] }>("/api/spectators/trades?limit=100");
+  state.spectatorTrades = payload.trades ?? [];
+  renderAccountOpenPositions();
+}
+
+type LeaderboardEntry = {
+  rank: number;
+  animalName: string;
+  points: string;
+  isCurrentUser: boolean;
+};
+
+async function fetchAndRenderLeaderboard() {
+  const body = document.querySelector<HTMLElement>("#leaderboard-body");
+  if (!body) return;
+  body.innerHTML = `<div class="leaderboard-loading">${t("leaderboard.loading")}</div>`;
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (state.spectator?.authToken) {
+      headers["Authorization"] = `Bearer ${state.spectator.authToken}`;
+    }
+    const res = await fetch(apiUrl("/api/leaderboard"), { headers });
+    const data = (await res.json()) as { ok: boolean; entries: LeaderboardEntry[] };
+    if (!data.ok || !data.entries?.length) {
+      body.innerHTML = `<div class="leaderboard-loading">${t("leaderboard.empty")}</div>`;
+      return;
+    }
+    body.innerHTML = `
+      <table class="leaderboard-table">
+        <thead>
+          <tr>
+            <th>${t("leaderboard.rank")}</th>
+            <th>${t("leaderboard.player")}</th>
+            <th>${t("leaderboard.points")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.entries.map((e) => `
+            <tr class="${e.isCurrentUser ? "leaderboard-me" : ""}">
+              <td class="leaderboard-rank">${e.rank}</td>
+              <td class="leaderboard-name">${escapeHtml(e.animalName)}${e.isCurrentUser ? " <span class='leaderboard-you'>you</span>" : ""}</td>
+              <td class="leaderboard-pts">${escapeHtml(e.points)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  } catch {
+    body.innerHTML = `<div class="leaderboard-loading">${t("leaderboard.empty")}</div>`;
+  }
+}
+
+function getAdminApiToken() {
+  const cached = sessionStorage.getItem(ADMIN_API_KEY_STORAGE_KEY);
+  if (cached) {
+    return cached;
+  }
+  const entered = window.prompt("Admin API key");
+  const token = entered?.trim() ?? "";
+  if (!token) {
+    return null;
+  }
+  sessionStorage.setItem(ADMIN_API_KEY_STORAGE_KEY, token);
+  return token;
+}
+
 async function refreshWalletState() {
   renderWallet();
-  if (!state.account) {
+  const trader = activeTradingAddress();
+  if (!trader) {
+    state.balance = 0n;
+    state.thresholdAllowance = 0n;
+    state.intervalAllowance = 0n;
+    state.allowance = 0n;
+    renderWallet();
     return;
   }
   const [balance, thresholdAllowance, intervalAllowance] = await Promise.all([
@@ -1287,27 +2842,29 @@ async function refreshWalletState() {
       address: TOKEN_ADDRESS,
       abi: tokenAbi,
       functionName: "balanceOf",
-      args: [state.account],
+      args: [trader],
     }),
     publicClient.readContract({
       address: TOKEN_ADDRESS,
       abi: tokenAbi,
       functionName: "allowance",
-      args: [state.account, MARKET_ADDRESS],
+      args: [trader, MARKET_ADDRESS],
     }),
     INTERVAL_MARKET_ADDRESS
       ? publicClient.readContract({
           address: TOKEN_ADDRESS,
           abi: tokenAbi,
           functionName: "allowance",
-          args: [state.account, INTERVAL_MARKET_ADDRESS],
+          args: [trader, INTERVAL_MARKET_ADDRESS],
         })
       : Promise.resolve(0n),
   ]);
   state.balance = balance;
-  state.allowance = INTERVAL_MARKET_ADDRESS
-    ? (thresholdAllowance < intervalAllowance ? thresholdAllowance : intervalAllowance)
-    : thresholdAllowance;
+  state.thresholdAllowance = thresholdAllowance;
+  state.intervalAllowance = intervalAllowance;
+  state.allowance = isAdminRoute
+    ? thresholdAllowance
+    : (INTERVAL_MARKET_ADDRESS ? intervalAllowance : thresholdAllowance);
   renderWallet();
 }
 
@@ -1315,6 +2872,7 @@ async function refreshMarkets() {
   const marketIds = Array.from(state.marketMeta.keys())
     .sort((left, right) => right - left)
     .slice(0, 32);
+  const trader = activeTradingAddress();
   if (marketIds.length === 0) {
     state.markets = [];
     renderMarkets();
@@ -1347,12 +2905,12 @@ async function refreshMarkets() {
       let myYesShares = 0n;
       let myNoShares = 0n;
       let myClaimed = false;
-      if (state.account) {
+      if (trader) {
         const position = (await publicClient.readContract({
           address: MARKET_ADDRESS,
           abi: marketAbi,
           functionName: "positions",
-          args: [id, state.account],
+          args: [id, trader],
         })) as RawPositionTuple;
         myYesShares = position[0];
         myNoShares = position[1];
@@ -1397,6 +2955,7 @@ async function loadIntervalMarket(record: IntervalMarketRegistryRecord): Promise
   if (!INTERVAL_MARKET_ADDRESS) {
     return null;
   }
+  const trader = activeTradingAddress();
 
   try {
     const market = await publicClient.readContract({
@@ -1409,16 +2968,20 @@ async function loadIntervalMarket(record: IntervalMarketRegistryRecord): Promise
     let myAboveStake = 0n;
     let myBelowStake = 0n;
     let myClaimed = false;
-    if (state.account) {
-      const position = await publicClient.readContract({
-        address: INTERVAL_MARKET_ADDRESS,
-        abi: parimutuelIntervalMarketAbi,
-        functionName: "positions",
-        args: [BigInt(record.marketId), state.account],
-      });
-      myAboveStake = position[0];
-      myBelowStake = position[1];
-      myClaimed = position[2];
+    if (trader) {
+      try {
+        const position = await publicClient.readContract({
+          address: INTERVAL_MARKET_ADDRESS,
+          abi: parimutuelIntervalMarketAbi,
+          functionName: "positions",
+          args: [BigInt(record.marketId), trader],
+        });
+        myAboveStake = position[0];
+        myBelowStake = position[1];
+        myClaimed = position[2];
+      } catch {
+        // Keep the market tradable even if the personal position read flakes once.
+      }
     }
 
     return {
@@ -1445,7 +3008,30 @@ async function loadIntervalMarket(record: IntervalMarketRegistryRecord): Promise
       metric: record.metric,
     };
   } catch {
-    return null;
+    const createdAtMs = Date.parse(record.createdAt);
+    return {
+      id: BigInt(record.marketId),
+      sessionIdHash: hashMetricSessionId(record.sessionId, record.metric),
+      creator: SETTLEMENT_OPERATOR,
+      intervalStartElapsedMs: BigInt(record.windowStartElapsedMs),
+      intervalEndElapsedMs: BigInt(record.windowEndElapsedMs),
+      tradingClosesAtTimestamp: BigInt(record.tradingClosesAtTimestamp),
+      referenceValue: record.referenceValue,
+      signalType: record.signalType,
+      createdAt: BigInt(Number.isFinite(createdAtMs) ? Math.floor(createdAtMs / 1000) : Math.floor(Date.now() / 1000)),
+      status: Date.now() < record.tradingClosesAtTimestamp * 1000 ? 0 : 1,
+      settledOutcomeAbove: false,
+      observedValue: 0n,
+      settledAt: 0n,
+      settledSampleElapsedMs: 0n,
+      settledSampleSeq: 0,
+      totalAboveStake: 0n,
+      totalBelowStake: 0n,
+      myAboveStake: 0n,
+      myBelowStake: 0n,
+      myClaimed: false,
+      metric: record.metric,
+    };
   }
 }
 
@@ -1461,6 +3047,22 @@ function matchingIntervalRegistryRecord(metric: "hr" | "rr" | "steps", startElap
   )) ?? null;
 }
 
+function latestPublishedIntervalRegistryRecord(metric: "hr" | "rr" | "steps") {
+  const session = selectedSession();
+  if (!session) {
+    return null;
+  }
+  const records = state.intervalMarketRegistry
+    .filter((record) => record.metric === metric && record.sessionId === session.sessionId)
+    .sort((left, right) => left.windowStartElapsedMs - right.windowStartElapsedMs)
+  if (records.length === 0) {
+    return null;
+  }
+  const currentStartElapsedMs = currentRollingIntervalStartElapsedMs(session);
+  const currentOrEarlier = records.filter((record) => record.windowStartElapsedMs <= currentStartElapsedMs);
+  return currentOrEarlier.at(-1) ?? records.at(-1) ?? null;
+}
+
 async function loadMatchingIntervalMarket(metric: "hr" | "rr" | "steps", startElapsedMs: number | null) {
   const record = matchingIntervalRegistryRecord(metric, startElapsedMs);
   if (!record) {
@@ -1470,14 +3072,30 @@ async function loadMatchingIntervalMarket(metric: "hr" | "rr" | "steps", startEl
 }
 
 async function approveTokens() {
+  if (usingSpectatorWallet()) {
+    setStatus("Email wallet is already provisioned for live trading", "success");
+    return;
+  }
   const amount = parseNumberInput("approve-amount") ?? (isAdminRoute ? null : 1000);
   if (!amount || !state.account) {
     setStatus("Connect wallet and enter approval amount", "warning");
     return;
   }
-  const walletClient = getWalletClient();
   const parsedAmount = parseUnits(String(amount), COLLATERAL_DECIMALS);
-  await walletClient.writeContract({
+  if (!isAdminRoute) {
+    if (state.intervalAllowance > 0n) {
+      setStatus(`${COLLATERAL_SYMBOL} interval trading is already enabled`, "success");
+      return;
+    }
+    const approved = await ensureIntervalAllowance(parsedAmount);
+    if (approved) {
+      setStatus(`Enabled ${COLLATERAL_SYMBOL} interval trading`, "success");
+    }
+    return;
+  }
+
+  const walletClient = getWalletClient();
+  const thresholdHash = await walletClient.writeContract({
     account: state.account,
     chain: configuredChain,
     address: TOKEN_ADDRESS,
@@ -1485,8 +3103,9 @@ async function approveTokens() {
     functionName: "approve",
     args: [MARKET_ADDRESS, parsedAmount],
   });
+  await publicClient.waitForTransactionReceipt({ hash: thresholdHash });
   if (INTERVAL_MARKET_ADDRESS) {
-    await walletClient.writeContract({
+    const intervalHash = await walletClient.writeContract({
       account: state.account,
       chain: configuredChain,
       address: TOKEN_ADDRESS,
@@ -1494,12 +3113,47 @@ async function approveTokens() {
       functionName: "approve",
       args: [INTERVAL_MARKET_ADDRESS, parsedAmount],
     });
+    await publicClient.waitForTransactionReceipt({ hash: intervalHash });
   }
   setStatus(`Approved ${amount} ${COLLATERAL_SYMBOL}`, "success");
   await refreshWalletState();
 }
 
+async function ensureIntervalAllowance(requiredAmount: bigint) {
+  if (usingSpectatorWallet()) {
+    return state.intervalAllowance >= requiredAmount;
+  }
+  if (!state.account) {
+    setStatus("Connect wallet to trade", "warning");
+    return false;
+  }
+  if (!INTERVAL_MARKET_ADDRESS) {
+    setStatus("Interval market contract is not configured", "error");
+    return false;
+  }
+  if (state.intervalAllowance >= requiredAmount) {
+    return true;
+  }
+
+  const walletClient = getWalletClient();
+  setStatus(`Opening wallet to enable ${COLLATERAL_SYMBOL} interval trading…`);
+  await walletClient.writeContract({
+    account: state.account,
+    chain: configuredChain,
+    address: TOKEN_ADDRESS,
+    abi: tokenAbi,
+    functionName: "approve",
+    args: [INTERVAL_MARKET_ADDRESS, 2n ** 256n - 1n],
+  });
+  await refreshWalletState();
+  return state.intervalAllowance >= requiredAmount;
+}
+
 async function claimFaucet() {
+  if (usingSpectatorWallet()) {
+    setStatus(`Login wallet already received ${state.spectator?.fundedAmountFormatted ?? SPECTATOR_STARTING_POINTS.toString()} ${TRADING_UNIT_LABEL}`, "success");
+    return;
+  }
   if (state.faucet?.externalFaucetUrl && !state.faucet.ready) {
     window.open(state.faucet.externalFaucetUrl, "_blank", "noopener,noreferrer");
     setStatus(`Opened ${COLLATERAL_SYMBOL} faucet`, "success");
@@ -1624,25 +3278,41 @@ async function resolveSelectedMarket() {
 }
 
 async function takePosition(marketId: bigint, isYes: boolean, inputId: string) {
-  if (!state.account) {
-    setStatus("Connect wallet to bet", "warning");
-    return;
-  }
   const amount = parseNumberInput(inputId);
   if (!amount) {
     setStatus("Enter a bet amount", "warning");
     return;
   }
+  if (usingSpectatorWallet()) {
+    const payload = await spectatorRequest<{ txHash: string; explorerUrl?: string }>("/api/spectators/trade/threshold", {
+      marketId: Number(marketId),
+      isYes,
+      amount,
+    });
+    setStatus(`Placed ${amount} ${TRADING_UNIT_LABEL} on ${isYes ? "YES" : "NO"}${payload.txHash ? ` · ${shortenHash(payload.txHash)}` : ""}`, "success");
+    await refreshMarkets();
+    await refreshWalletState();
+    if (payload.txHash) {
+      return;
+    }
+    return;
+  }
+  if (!state.account) {
+    setStatus("Connect wallet to bet", "warning");
+    return;
+  }
   const walletClient = getWalletClient();
-  await walletClient.writeContract({
+  const hash = await walletClient.writeContract({
     account: state.account,
     chain: configuredChain,
     address: MARKET_ADDRESS,
     abi: marketAbi,
     functionName: "takePosition",
-    args: [marketId, isYes, parseUnits(String(amount), COLLATERAL_DECIMALS)],
+    args: [marketId, isYes, parseUnits(String(amount), TRADING_UNIT_DECIMALS)],
   });
-  setStatus(`Placed ${amount} ${COLLATERAL_SYMBOL} on ${isYes ? "YES" : "NO"}`, "success");
+  setStatus(`Submitting ${amount} ${TRADING_UNIT_LABEL} on ${isYes ? "YES" : "NO"}…`);
+  await publicClient.waitForTransactionReceipt({ hash });
+  setStatus(`Placed ${amount} ${TRADING_UNIT_LABEL} on ${isYes ? "YES" : "NO"} · ${shortenHash(hash)}`, "success");
   await refreshMarkets();
   await refreshWalletState();
 }
@@ -1657,7 +3327,7 @@ function intervalClaimable(market: IntervalParimutuelMarketRecord | null) {
 }
 
 function estimateIntervalPayout(market: IntervalParimutuelMarketRecord, isAbove: boolean, stake: number) {
-  const collateralIn = parseUnits(String(stake), COLLATERAL_DECIMALS);
+  const collateralIn = parseUnits(String(stake), TRADING_UNIT_DECIMALS);
   if (collateralIn <= 0n) {
     return 0;
   }
@@ -1668,7 +3338,19 @@ function estimateIntervalPayout(market: IntervalParimutuelMarketRecord, isAbove:
   if (winningPool <= 0n) {
     return 0;
   }
-  return Number(formatUnits((totalPool * collateralIn) / winningPool, COLLATERAL_DECIMALS));
+  return Number(formatUnits((totalPool * collateralIn) / winningPool, TRADING_UNIT_DECIMALS));
+}
+
+function intervalStakeSummary(market: IntervalParimutuelMarketRecord, metricLabel: string) {
+  const totalAbove = Number(formatUnits(market.totalAboveStake, TRADING_UNIT_DECIMALS));
+  const totalBelow = Number(formatUnits(market.totalBelowStake, TRADING_UNIT_DECIMALS));
+  const myAbove = Number(formatUnits(market.myAboveStake, TRADING_UNIT_DECIMALS));
+  const myBelow = Number(formatUnits(market.myBelowStake, TRADING_UNIT_DECIMALS));
+  const poolCopy = `Pool ${metricLabel}: Above ${totalAbove.toFixed(2)} / Below ${totalBelow.toFixed(2)} ${TRADING_UNIT_LABEL}.`;
+  const myExposure = myAbove > 0 || myBelow > 0
+    ? ` Your position: Above ${myAbove.toFixed(2)} / Below ${myBelow.toFixed(2)} ${TRADING_UNIT_LABEL}.`
+    : "";
+  return `${poolCopy}${myExposure}`;
 }
 
 async function takeIntervalPosition(
@@ -1677,10 +3359,6 @@ async function takeIntervalPosition(
   inputId: string,
   metricLabel: string,
 ) {
-  if (!state.account) {
-    setStatus("Connect wallet to trade", "warning");
-    return;
-  }
   if (!INTERVAL_MARKET_ADDRESS) {
     setStatus("Interval market contract is not configured", "error");
     return;
@@ -1690,34 +3368,114 @@ async function takeIntervalPosition(
     setStatus("Enter a position size", "warning");
     return;
   }
+  const collateralIn = parseUnits(String(amount), TRADING_UNIT_DECIMALS);
+  if (state.balance < collateralIn) {
+    setStatus(`Not enough ${TRADING_UNIT_LABEL} to place that interval position`, "warning");
+    return;
+  }
+  const approved = await ensureIntervalAllowance(collateralIn);
+  if (!approved) {
+    setStatus(`Enable ${COLLATERAL_SYMBOL} interval trading first`, "warning");
+    return;
+  }
+  if (usingSpectatorWallet()) {
+    setStatus(`Confirming ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"}…`);
+    const payload = await spectatorRequest<{ txHash: string; explorerUrl?: string }>("/api/spectators/trade/interval", {
+      marketId: Number(marketId),
+      isAbove,
+      amount,
+    });
+    setStatus(`Placed ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"} · ${shortenHash(payload.txHash)}`, "success");
+    const metric = metricKeyForLabel(metricLabel);
+    const prediction: PendingPrediction = {
+      marketId,
+      metric,
+      metricLabel,
+      isAbove,
+      amount,
+      reference: activeIntervalReferenceForMetric(metric) ?? 0,
+      unit: metricUnitLabel(metric),
+      txHash: payload.txHash as `0x${string}`,
+      notified: false,
+    };
+    recordPendingPrediction(prediction);
+    notifyPredictionPlaced(prediction);
+    await refreshWalletState();
+    await refreshIntervalMarketRegistry();
+    await refreshSpectatorTrades().catch(() => {
+      // The local pending prediction still shows immediately if the ledger lags.
+    });
+    await refreshIntervalExperience();
+    if (SHOW_RR_INTERVAL_EXPERIENCE) {
+      await refreshRrIntervalExperience();
+    }
+    await refreshStepsIntervalExperience();
+    renderIntervalTradePanel();
+    if (SHOW_RR_INTERVAL_EXPERIENCE) {
+      renderRrIntervalTradePanel();
+    }
+    renderStepsIntervalTradePanel();
+    return;
+  }
+  if (!state.account) {
+    setStatus("Connect wallet to trade", "warning");
+    return;
+  }
   const walletClient = getWalletClient();
-  await walletClient.writeContract({
+  setStatus(`Confirming ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"}…`);
+  const hash = await walletClient.writeContract({
     account: state.account,
     chain: configuredChain,
     address: INTERVAL_MARKET_ADDRESS,
     abi: parimutuelIntervalMarketAbi,
     functionName: "takePosition",
-    args: [marketId, isAbove, parseUnits(String(amount), COLLATERAL_DECIMALS)],
+    args: [marketId, isAbove, collateralIn],
   });
-  setStatus(`Placed ${amount} ${COLLATERAL_SYMBOL} on ${metricLabel} ${isAbove ? "above" : "below"}`, "success");
+  setStatus(`Waiting for ${metricLabel} ${isAbove ? "above" : "below"} confirmation…`);
+  await publicClient.waitForTransactionReceipt({ hash });
+  setStatus(`Placed ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"} · ${shortenHash(hash)}`, "success");
   await refreshWalletState();
   await refreshIntervalMarketRegistry();
+  await refreshSpectatorTrades().catch(() => {
+    // The local position state still updates from onchain reads if the ledger lags.
+  });
   await refreshIntervalExperience();
-  await refreshRrIntervalExperience();
+  if (SHOW_RR_INTERVAL_EXPERIENCE) {
+    await refreshRrIntervalExperience();
+  }
   await refreshStepsIntervalExperience();
 }
 
 async function claimIntervalMarket(marketId: bigint, metric: "hr" | "rr" | "steps") {
-  if (!state.account) {
-    setStatus("Connect wallet to claim", "warning");
-    return;
-  }
   if (!INTERVAL_MARKET_ADDRESS) {
     setStatus("Interval market contract is not configured", "error");
     return;
   }
+  if (usingSpectatorWallet()) {
+    setStatus(`Confirming ${metric.toUpperCase()} interval claim…`);
+    const payload = await spectatorRequest<{ txHash: string; explorerUrl?: string }>("/api/spectators/claim/interval", {
+      marketId: Number(marketId),
+    });
+    setStatus(`Claimed ${metric.toUpperCase()} interval market #${marketId.toString()} · ${shortenHash(payload.txHash)}`, "success");
+    await refreshWalletState();
+    await refreshIntervalMarketRegistry();
+    await refreshSpectatorTrades().catch(() => {
+      // Claim confirmation should not be blocked by a ledger refresh failure.
+    });
+    await refreshIntervalExperience();
+    if (SHOW_RR_INTERVAL_EXPERIENCE) {
+      await refreshRrIntervalExperience();
+    }
+    await refreshStepsIntervalExperience();
+    return;
+  }
+  if (!state.account) {
+    setStatus("Connect wallet to claim", "warning");
+    return;
+  }
   const walletClient = getWalletClient();
-  await walletClient.writeContract({
+  setStatus(`Confirming ${metric.toUpperCase()} interval claim…`);
+  const hash = await walletClient.writeContract({
     account: state.account,
     chain: configuredChain,
     address: INTERVAL_MARKET_ADDRESS,
@@ -1725,21 +3483,37 @@ async function claimIntervalMarket(marketId: bigint, metric: "hr" | "rr" | "step
     functionName: "claim",
     args: [marketId],
   });
-  setStatus(`Claimed ${metric.toUpperCase()} interval market #${marketId.toString()}`, "success");
+  setStatus(`Submitting claim for ${metric.toUpperCase()} interval market #${marketId.toString()}…`);
+  await publicClient.waitForTransactionReceipt({ hash });
+  setStatus(`Claimed ${metric.toUpperCase()} interval market #${marketId.toString()} · ${shortenHash(hash)}`, "success");
   await refreshWalletState();
   await refreshIntervalMarketRegistry();
+  await refreshSpectatorTrades().catch(() => {
+    // Claim confirmation should not be blocked by a ledger refresh failure.
+  });
   await refreshIntervalExperience();
-  await refreshRrIntervalExperience();
+  if (SHOW_RR_INTERVAL_EXPERIENCE) {
+    await refreshRrIntervalExperience();
+  }
   await refreshStepsIntervalExperience();
 }
 
 async function claimMarket(marketId: bigint) {
+  if (usingSpectatorWallet()) {
+    await spectatorRequest<{ txHash: string }>("/api/spectators/claim/threshold", {
+      marketId: Number(marketId),
+    });
+    setStatus(`Claimed market #${marketId}`, "success");
+    await refreshMarkets();
+    await refreshWalletState();
+    return;
+  }
   if (!state.account) {
     setStatus("Connect wallet to claim", "warning");
     return;
   }
   const walletClient = getWalletClient();
-  await walletClient.writeContract({
+  const hash = await walletClient.writeContract({
     account: state.account,
     chain: configuredChain,
     address: MARKET_ADDRESS,
@@ -1747,6 +3521,8 @@ async function claimMarket(marketId: bigint) {
     functionName: "claim",
     args: [marketId],
   });
+  setStatus(`Submitting claim for market #${marketId.toString()}…`);
+  await publicClient.waitForTransactionReceipt({ hash });
   setStatus(`Claimed market #${marketId}`, "success");
   await refreshMarkets();
   await refreshWalletState();
@@ -1757,14 +3533,65 @@ function renderWallet() {
   const balance = document.querySelector<HTMLElement>("#token-balance");
   const allowance = document.querySelector<HTMLElement>("#token-allowance");
   const mintPanel = document.querySelector<HTMLElement>("#mint-panel");
+  const spectatorSummary = document.querySelector<HTMLElement>("#spectator-summary");
+  const spectatorStatus = document.querySelector<HTMLElement>("#spectator-status");
+  const spectatorReset = document.querySelector<HTMLButtonElement>("#spectator-reset");
+  const privyLoginButton = document.querySelector<HTMLButtonElement>("#privy-login-button");
+  const accountInitial = document.querySelector<HTMLElement>("#account-avatar-initial");
+  const accountEmail = document.querySelector<HTMLElement>("#account-menu-email");
+  const accountPoints = document.querySelector<HTMLElement>("#account-menu-points");
   if (readout) {
-    readout.textContent = state.account ? `${shortenAddress(state.account)}${addressesEqual(state.account, SETTLEMENT_OPERATOR) ? " · operator" : ""}` : "Not connected";
+    if (state.account) {
+      readout.textContent = `${shortenAddress(state.account)}${addressesEqual(state.account, SETTLEMENT_OPERATOR) ? " · operator" : ""}`;
+    } else if (state.spectator) {
+      readout.textContent = `${shortenAddress(state.spectator.walletAddress)} · ${state.spectator.email}`;
+    } else {
+      readout.textContent = "Not connected";
+    }
   }
   if (balance) {
-    balance.textContent = `${formatDisplay(state.balance)} ${COLLATERAL_SYMBOL}`;
+    balance.textContent = `${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}`;
   }
   if (allowance) {
-    allowance.textContent = `${formatDisplay(state.allowance)} ${COLLATERAL_SYMBOL}`;
+    allowance.textContent = `${formatDisplay(state.allowance)} ${TRADING_UNIT_LABEL}`;
+  }
+  if (spectatorSummary) {
+    spectatorSummary.textContent = state.spectator
+      ? `Login wallet active for ${state.spectator.email}.`
+      : "Log in to fund the live run.";
+  }
+  if (spectatorStatus) {
+    spectatorStatus.textContent = state.spectator
+      ? `Ready on ${shortenAddress(state.spectator.walletAddress)} with ${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL} available.`
+      : `Privy verifies the user, then the backend funds a no-prompt testing seat with ${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL}.`;
+  }
+  if (spectatorReset) {
+    spectatorReset.disabled = !state.spectator;
+  }
+  if (privyLoginButton) {
+    privyLoginButton.disabled = !PRIVY_APP_ID;
+    privyLoginButton.innerHTML = state.spectator
+      ? `<span>${formatSpectatorDisplayEmail(state.spectator.email)}</span><small>${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL} ready</small>`
+      : `<span>Log in</span><small>${PRIVY_APP_ID ? `${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL} ready` : "Privy app id missing"}</small>`;
+  }
+  if (accountInitial) {
+    accountInitial.textContent = state.spectator ? spectatorInitial(state.spectator.email) : "?";
+  }
+  if (accountEmail) {
+    accountEmail.textContent = state.spectator ? formatSpectatorDisplayEmail(state.spectator.email) : "Signed out";
+  }
+  if (accountPoints) {
+    accountPoints.textContent = `${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}`;
+  }
+  const topbarPoints = document.querySelector<HTMLElement>("#account-topbar-points");
+  if (topbarPoints) {
+    topbarPoints.textContent = state.spectator ? `${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}` : "";
+  }
+  renderAccountOpenPositions();
+  updateNudgeAnimation();
+  const privyLogoutButton = document.querySelector<HTMLButtonElement>("#privy-logout-button");
+  if (privyLogoutButton) {
+    privyLogoutButton.hidden = !state.spectator;
   }
   if (mintPanel) {
     mintPanel.style.display = isAdminRoute && addressesEqual(state.account, SETTLEMENT_OPERATOR) ? "block" : "none";
@@ -1777,16 +3604,16 @@ function renderAccessSummary() {
   if (!summary || isAdminRoute) {
     return;
   }
-  if (!window.ethereum) {
-    summary.textContent = "Install MetaMask or Rabby to enable interval trading.";
+  if (state.spectator && !state.account) {
+    summary.textContent = `Login wallet is live with ${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}.`;
   } else if (!state.account) {
-    summary.textContent = "Connect a wallet to activate this analyst board for trading.";
+    summary.textContent = `Log in with Google, GitHub, or X to get ${SPECTATOR_STARTING_POINTS.toLocaleString()} ${TRADING_UNIT_LABEL} for the live markets.`;
   } else if (state.balance <= 0n) {
     summary.textContent = "Wallet connected. Claim a test balance to enter the live interval.";
   } else if (state.allowance <= 0n) {
     summary.textContent = "Funding is ready. Enable trading once to place interval positions.";
   } else {
-    summary.textContent = `Trading is live with ${formatDisplay(state.balance)} ${COLLATERAL_SYMBOL} available.`;
+    summary.textContent = `Trading is live with ${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL} available.`;
   }
   renderBroadcastSummary();
 }
@@ -1817,7 +3644,8 @@ function renderBroadcastSummary() {
     intervalWindow.textContent = formatIntervalSubtitle(startAt, endAt);
   }
 
-  reference.textContent = state.intervalReferenceBpm ? `${state.intervalReferenceBpm} bpm` : "--";
+  const displayReference = activeIntervalReferenceForMetric("hr");
+  reference.textContent = displayReference ? `${displayReference} bpm` : "--";
   current.textContent = state.intervalCurrentBpm ? `${state.intervalCurrentBpm} bpm` : "--";
 
   if (!session || !state.intervalViewRange) {
@@ -1827,7 +3655,7 @@ function renderBroadcastSummary() {
   } else if (market.status !== 0) {
     marketNote.textContent = "This interval is closed. Stay with the broadcast while the next one opens.";
   } else {
-    marketNote.textContent = "The current 5-minute interval is live with above-reference and below-reference positions.";
+    marketNote.textContent = `The current ${LIVE_INTERVAL_LABEL} interval is live with above-reference and below-reference positions.`;
   }
 
   if (analystSessionState) {
@@ -1839,19 +3667,19 @@ function renderBroadcastSummary() {
   }
 
   if (analystSignalRead) {
-    analystSignalRead.textContent = state.intervalCurrentBpm === null || state.intervalReferenceBpm === null
+    analystSignalRead.textContent = state.intervalCurrentBpm === null || displayReference === null
       ? "No interval signal yet"
-      : state.intervalCurrentBpm > state.intervalReferenceBpm
-        ? `${state.intervalCurrentBpm - state.intervalReferenceBpm} bpm above reference`
-        : state.intervalCurrentBpm < state.intervalReferenceBpm
-          ? `${state.intervalReferenceBpm - state.intervalCurrentBpm} bpm below reference`
+      : state.intervalCurrentBpm > displayReference
+        ? `${state.intervalCurrentBpm - displayReference} bpm above reference`
+        : state.intervalCurrentBpm < displayReference
+          ? `${displayReference - state.intervalCurrentBpm} bpm below reference`
           : "Live HR is sitting on the reference";
   }
 
-  if (!window.ethereum) {
-    accessNote.textContent = "Install MetaMask or Rabby below if you want to trade from this live view.";
+  if (state.spectator && !state.account) {
+    accessNote.textContent = `Your login wallet is funded with ${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}. You can place positions from this phone view.`;
   } else if (!state.account) {
-    accessNote.textContent = "Connect a wallet below if you want to trade from this live view.";
+    accessNote.textContent = "Log in with Google, GitHub, or X to start paper predicting on this live view.";
   } else if (state.balance <= 0n) {
     accessNote.textContent = "Wallet connected. Claim a test balance below to activate interval trading.";
   } else if (state.allowance <= 0n) {
@@ -1861,10 +3689,10 @@ function renderBroadcastSummary() {
   }
 
   if (analystTradingState) {
-    analystTradingState.textContent = !window.ethereum
-      ? "Wallet not installed"
+    analystTradingState.textContent = state.spectator && !state.account
+      ? `${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL} ready`
       : !state.account
-        ? "Wallet not connected"
+        ? "Log in to start"
         : state.balance <= 0n
           ? "Balance required"
           : state.allowance <= 0n
@@ -1881,6 +3709,107 @@ function renderBroadcastSummary() {
           ? "This interval is closed. Stay on the feed and wait for the next window to open."
           : "This window is actionable. Use the board for flow and the market panel for execution.";
   }
+
+  renderStreamHealth();
+  renderSettlementTrail();
+}
+
+function renderStreamHealth() {
+  const stateNode = document.querySelector<HTMLElement>("#stream-health-state");
+  const detailNode = document.querySelector<HTMLElement>("#stream-health-detail");
+  if (!stateNode || !detailNode) {
+    return;
+  }
+  const session = selectedSession();
+  const lastSampleAt = session?.lastSampleAt ? Date.parse(session.lastSampleAt) : null;
+  const sampleAgeMs = lastSampleAt ? Date.now() - lastSampleAt : null;
+  const sampleCount = session?.sampleCount ?? 0;
+  const hasOpenMarkets = [state.intervalMarket, state.stepsIntervalMarket].some((market) => market?.status === 0);
+  if (state.refreshFailureCount > 0) {
+    stateNode.textContent = `Retrying feed (${state.refreshFailureCount})`;
+    detailNode.textContent = "The UI keeps polling and will recover automatically.";
+    return;
+  }
+  if (!session) {
+    stateNode.textContent = "Waiting for session";
+    detailNode.textContent = "Telemetry will appear when the event feed starts.";
+    return;
+  }
+  if (sampleAgeMs !== null && sampleAgeMs <= 20_000) {
+    stateNode.textContent = "Live feed solid";
+    detailNode.textContent = `${sampleCount.toLocaleString()} samples · last ${Math.max(1, Math.round(sampleAgeMs / 1000))}s ago · ${hasOpenMarkets ? "markets open" : "markets syncing"}.`;
+    return;
+  }
+  stateNode.textContent = "Feed lagging";
+  detailNode.textContent = sampleAgeMs === null
+    ? `${sampleCount.toLocaleString()} samples loaded, waiting for latest timestamp.`
+    : `${sampleCount.toLocaleString()} samples · last ${Math.round(sampleAgeMs / 1000)}s ago.`;
+}
+
+function renderSettlementTrail() {
+  const list = document.querySelector<HTMLElement>("#settlement-trail-list");
+  if (!list || isAdminRoute) {
+    return;
+  }
+  const markets = [state.intervalMarket, state.stepsIntervalMarket, state.rrIntervalMarket].filter(Boolean) as IntervalParimutuelMarketRecord[];
+  if (markets.length === 0) {
+    list.innerHTML = `
+      <div class="settlement-trail-empty">
+        <strong>No interval proof yet</strong>
+        <span>Once the automation publishes a market, this trail will show create tx, telemetry window, settlement tx, and claim readiness.</span>
+      </div>
+    `;
+    return;
+  }
+  list.innerHTML = markets.map((market) => settlementTrailCard(market)).join("");
+}
+
+function settlementTrailCard(market: IntervalParimutuelMarketRecord) {
+  const record = registryRecordForMarket(market);
+  const label = metricDisplayName(market.metric);
+  const unit = metricUnit(market.metric);
+  const settled = market.status === 1 || Boolean(record?.settledTxHash);
+  const observed = market.observedValue > 0n ? market.observedValue.toString() : record?.settledObservedValue?.toString();
+  const settledOutcomeAbove = market.status === 1 ? market.settledOutcomeAbove : record?.settledOutcomeAbove;
+  return `
+    <article class="settlement-trail-card">
+      <div class="settlement-trail-title">
+        <span>${label} #${market.id.toString()}</span>
+        <strong>${settled ? "Settled onchain" : market.status === 0 ? "Open onchain" : statusLabel(market.status)}</strong>
+      </div>
+      <div class="settlement-steps">
+        <div><span>1. Market</span><strong>${txLink(record?.createdTxHash) ?? "Registry synced"}</strong></div>
+        <div><span>2. Window</span><strong>${Number(market.intervalStartElapsedMs / 1000n)}s-${Number(market.intervalEndElapsedMs / 1000n)}s</strong></div>
+        <div><span>3. Settlement</span><strong>${txLink(record?.settledTxHash) ?? (settled ? "Tx indexed soon" : "Awaiting close")}</strong></div>
+        <div><span>4. Outcome</span><strong>${settled && observed ? `${settledOutcomeAbove ? "Above" : "Below"} · ${observed} ${unit}` : "Pending"}</strong></div>
+      </div>
+      <p>${settled ? `Resolved from sample #${market.settledSampleSeq || record?.settledSampleSeq || "-"} and now claimable by winning positions.` : "Automation will settle this after the telemetry window closes."}</p>
+    </article>
+  `;
+}
+
+function registryRecordForMarket(market: IntervalParimutuelMarketRecord) {
+  return state.intervalMarketRegistry.find((record) => record.metric === market.metric && record.marketId === Number(market.id));
+}
+
+function txLink(hash?: string) {
+  if (!hash) {
+    return null;
+  }
+  const safeHash = escapeHtml(hash);
+  return `<a href="${ARC_TESTNET_EXPLORER_URL}/tx/${safeHash}" target="_blank" rel="noreferrer">${shortenHash(hash)}</a>`;
+}
+
+function metricDisplayName(metric: "hr" | "rr" | "steps") {
+  if (metric === "rr") return "RR interval";
+  if (metric === "steps") return "Steps";
+  return "Heart rate";
+}
+
+function metricUnit(metric: "hr" | "rr" | "steps") {
+  if (metric === "rr") return "ms";
+  if (metric === "steps") return "steps";
+  return "bpm";
 }
 
 function renderFaucet(message?: string) {
@@ -1900,16 +3829,18 @@ function renderFaucet(message?: string) {
   }
   if (status) {
     status.textContent = message ?? (
-      state.faucet?.ready
-        ? `One ${COLLATERAL_SYMBOL} allocation per wallet every 3 hours.`
-        : state.faucet?.externalFaucetUrl
-          ? `Use the Circle faucet for ${COLLATERAL_SYMBOL} on Arc Testnet.`
-          : "Test-balance claims are not configured right now."
+      usingSpectatorWallet()
+        ? `Email wallet is already funded for this run.`
+        : state.faucet?.ready
+          ? `One ${COLLATERAL_SYMBOL} allocation per wallet every 3 hours.`
+          : state.faucet?.externalFaucetUrl
+            ? `Use the Circle faucet for ${COLLATERAL_SYMBOL} on Arc Testnet.`
+            : "Test-balance claims are not configured right now."
     );
     status.classList.toggle("notice-error", Boolean(message && message.toLowerCase().includes("next claim")));
   }
   if (claimButton) {
-    claimButton.disabled = !state.account && !(state.faucet?.externalFaucetUrl && !state.faucet.ready);
+    claimButton.disabled = usingSpectatorWallet() || (!state.account && !(state.faucet?.externalFaucetUrl && !state.faucet.ready));
   }
   renderAccessSummary();
 }
@@ -1917,21 +3848,24 @@ function renderFaucet(message?: string) {
 function renderSessionOptions() {
   const select = document.querySelector<HTMLSelectElement>("#session-select");
   if (select) {
-    const previousValue = select.value;
+    const previousValue = select.value || state.preferredSessionId || "";
     const sessions = isAdminRoute
       ? state.sessions
-      : state.sessions
-          .filter((session) => session.status === "active" && (session.sampleCount ?? 0) > 0)
-          .slice(0, 1);
+      : state.sessions.slice(0, Math.min(4, state.sessions.length));
 
     select.innerHTML = sessions.map((session) => {
       const started = session.clientStartedAt ?? session.createdAt;
       return `<option value="${session.sessionId}">${session.sessionId.slice(0, 8)} · ${session.status} · ${formatClock(new Date(started), session)}</option>`;
     }).join("");
     if (sessions.length > 0) {
-      select.value = isAdminRoute && sessions.some((session) => session.sessionId === previousValue)
+      const nextValue = sessions.some((session) => session.sessionId === previousValue)
         ? previousValue
-        : sessions[0]!.sessionId;
+        : (state.currentSessionId && sessions.some((session) => session.sessionId === state.currentSessionId))
+          ? state.currentSessionId
+          : sessions[0]!.sessionId;
+      select.value = nextValue;
+      state.preferredSessionId = nextValue;
+      localStorage.setItem(PREFERRED_SESSION_STORAGE_KEY, nextValue);
     }
   }
   renderComputedElapsed();
@@ -1964,109 +3898,31 @@ function renderComputedElapsed() {
   target.textContent = `${stake || "0"} ${COLLATERAL_SYMBOL} on ${statementLabel(Number(readInputValue("threshold-direction")), Number(bpm), formatClock(settlementAt, session))}. Market participation closes at ${formatClock(closeAt, session)} local time.`;
 }
 
-function normalizeTelemetrySample(sample: TelemetrySample) {
-  return {
-    ...sample,
-    rrLatestMs: sample.rrLatestMs ?? sample.rrIntervalsMs?.at(-1) ?? null,
-    steps: sample.steps ?? null,
-  } satisfies TelemetrySample;
-}
-
-function latestMetricSampleAtOrBefore(samples: TelemetrySample[], targetMs: number, metric: "hr" | "rr" | "steps") {
-  let latest: TelemetrySample | null = null;
-  for (const sample of samples) {
-    if (sample.elapsedMsSinceSessionStart > targetMs) {
-      break;
-    }
-    if (metricSampleValue(sample, metric) === null) {
-      continue;
-    }
-    latest = sample;
-  }
-  return latest;
-}
-
-function firstMetricSampleAtOrAfter(samples: TelemetrySample[], targetMs: number, metric: "hr" | "rr" | "steps") {
-  for (const sample of samples) {
-    if (sample.elapsedMsSinceSessionStart < targetMs) {
-      continue;
-    }
-    if (metricSampleValue(sample, metric) === null) {
-      continue;
-    }
-    return sample;
-  }
-  return null;
-}
-
 async function fetchIntervalWindow(sessionId: string, intervalStartMs: number, metric: "hr" | "rr" | "steps") {
-  const intervalMs = 5 * 60_000;
-  const intervalEndMs = intervalStartMs + intervalMs;
-  const fetchFromMs = Math.max(0, intervalStartMs - intervalMs);
+  const intervalMs = LIVE_INTERVAL_MS;
   const params = new URLSearchParams({
-    elapsedFromMs: String(fetchFromMs),
-    elapsedToMs: String(intervalEndMs),
+    intervalStartMs: String(intervalStartMs),
+    intervalMs: String(intervalMs),
+    metric,
   });
-  const response = await fetch(apiUrl(`/api/telemetry/sessions/${sessionId}/hr-window?${params.toString()}`));
-  const payload = await readJson<TelemetryWindowResponse>(response, "Live interval telemetry is temporarily unavailable.");
-  const samples = (payload.samples ?? [])
-    .map((sample) => normalizeTelemetrySample(sample))
+  const isCurrentSession = sessionId === state.currentSessionId;
+  const path = isCurrentSession
+    ? `/api/cre/sessions/current/interval-window?${params.toString()}`
+    : `/api/cre/sessions/${sessionId}/interval-window?${params.toString()}`;
+  const response = await fetch(apiUrl(path));
+  const payload = await readJson<IntervalWindowPayload>(response, "Live interval telemetry is temporarily unavailable.");
+  const points = (payload.samples ?? [])
+    .slice()
     .sort((left, right) => left.elapsedMsSinceSessionStart - right.elapsedMsSinceSessionStart);
-
-  if (metric === "steps") {
-    const base = latestMetricSampleAtOrBefore(samples, intervalStartMs, "steps") ?? firstMetricSampleAtOrAfter(samples, intervalStartMs, "steps");
-    const previousBase = latestMetricSampleAtOrBefore(samples, fetchFromMs, "steps") ?? firstMetricSampleAtOrAfter(samples, fetchFromMs, "steps");
-    const previousEnd = latestMetricSampleAtOrBefore(samples, intervalStartMs, "steps");
-    const referenceValue = previousBase && previousEnd && previousEnd.steps !== null && previousBase.steps !== null
-      ? Math.max(0, (previousEnd.steps ?? 0) - (previousBase.steps ?? 0))
-      : null;
-    const points = base && base.steps !== null
-      ? samples
-          .filter((sample) => sample.elapsedMsSinceSessionStart >= intervalStartMs && sample.elapsedMsSinceSessionStart <= intervalEndMs && sample.steps !== null)
-          .map((sample) => ({
-            sampleSeq: sample.sampleSeq,
-            elapsedMsSinceSessionStart: sample.elapsedMsSinceSessionStart,
-            phoneObservedAt: sample.phoneObservedAt,
-            value: Math.max(0, (sample.steps ?? 0) - base.steps!),
-          }))
-      : [];
-    return {
-      ok: true,
-      sessionId,
-      metric,
-      intervalStartMs,
-      intervalEndMs,
-      referenceValue,
-      currentValue: points.at(-1)?.value ?? null,
-      latestElapsedMs: points.at(-1)?.elapsedMsSinceSessionStart ?? null,
-      samples: points,
-    } satisfies IntervalWindowPayload;
-  }
-
-  const referenceSample = latestMetricSampleAtOrBefore(samples, intervalStartMs, metric) ?? firstMetricSampleAtOrAfter(samples, intervalStartMs, metric);
-  const points = samples
-    .filter((sample) => sample.elapsedMsSinceSessionStart >= intervalStartMs && sample.elapsedMsSinceSessionStart <= intervalEndMs)
-    .flatMap((sample) => {
-      const value = metricSampleValue(sample, metric);
-      if (value === null) {
-        return [];
-      }
-      return [{
-        sampleSeq: sample.sampleSeq,
-        elapsedMsSinceSessionStart: sample.elapsedMsSinceSessionStart,
-        phoneObservedAt: sample.phoneObservedAt,
-        value,
-      }];
-    });
   return {
     ok: true,
-    sessionId,
-    metric,
-    intervalStartMs,
-    intervalEndMs,
-    referenceValue: referenceSample ? metricSampleValue(referenceSample, metric) : null,
-    currentValue: points.at(-1)?.value ?? null,
-    latestElapsedMs: points.at(-1)?.elapsedMsSinceSessionStart ?? null,
+    sessionId: payload.sessionId,
+    metric: payload.metric,
+    intervalStartMs: payload.intervalStartMs,
+    intervalEndMs: payload.intervalEndMs,
+    referenceValue: payload.referenceValue ?? null,
+    currentValue: payload.currentValue ?? points.at(-1)?.value ?? null,
+    latestElapsedMs: payload.latestElapsedMs ?? points.at(-1)?.elapsedMsSinceSessionStart ?? null,
     samples: points,
   } satisfies IntervalWindowPayload;
 }
@@ -2085,7 +3941,7 @@ function telemetrySampleFromIntervalPoint(
   };
 }
 
-async function refreshIntervalExperience() {
+async function refreshIntervalExperience(options: { refreshOnchain?: boolean } = { refreshOnchain: true }) {
   if (isAdminRoute) {
     return;
   }
@@ -2111,23 +3967,34 @@ async function refreshIntervalExperience() {
     return;
   }
 
+  const latestPublished = latestPublishedIntervalRegistryRecord("hr");
+  const currentWindowStartMs = currentRollingIntervalStartElapsedMs(session);
+  const targetStartMs = currentWindowStartMs;
   const selected =
-    intervals.find((item) => item.startElapsedMs === state.selectedIntervalStartMs) ??
+    intervals.find((item) => item.startElapsedMs === targetStartMs) ??
     intervals[intervals.length - 1];
-  state.selectedIntervalStartMs = selected.startElapsedMs;
-  const window = await fetchIntervalWindow(session.sessionId, selected.startElapsedMs, "hr");
+  const activeStartElapsedMs = selected?.startElapsedMs ?? currentWindowStartMs;
+  state.selectedIntervalStartMs = activeStartElapsedMs;
+  const window = await fetchIntervalWindow(session.sessionId, activeStartElapsedMs, "hr");
+  const market = options.refreshOnchain
+    ? latestPublished && latestPublished.windowStartElapsedMs === activeStartElapsedMs
+      ? await loadIntervalMarket(latestPublished)
+      : await loadMatchingIntervalMarket("hr", activeStartElapsedMs)
+    : state.intervalMarket && Number(state.intervalMarket.intervalStartElapsedMs) === activeStartElapsedMs
+      ? state.intervalMarket
+      : null;
   state.intervalSamples = window.samples.map((sample) => telemetrySampleFromIntervalPoint(sample, "hr"));
   state.intervalReferenceBpm = window.referenceValue;
   state.intervalCurrentBpm = window.currentValue ?? state.intervalSamples[state.intervalSamples.length - 1]?.bpm ?? window.referenceValue;
   state.intervalViewRange = {
-    startElapsedMs: selected.startElapsedMs,
-    endElapsedMs: selected.endElapsedMs,
+    startElapsedMs: activeStartElapsedMs,
+    endElapsedMs: activeStartElapsedMs + LIVE_INTERVAL_MS,
   };
-  state.intervalMarket = await loadMatchingIntervalMarket("hr", selected.startElapsedMs);
+  state.intervalMarket = market;
   renderIntervalHero();
 }
 
-async function refreshRrIntervalExperience() {
+async function refreshRrIntervalExperience(options: { refreshOnchain?: boolean } = { refreshOnchain: true }) {
   if (isAdminRoute) {
     return;
   }
@@ -2159,25 +4026,38 @@ async function refreshRrIntervalExperience() {
     return;
   }
 
+  const latestPublished = latestPublishedIntervalRegistryRecord("rr");
+  const currentWindowStartMs = currentRollingIntervalStartElapsedMs(session);
+  const targetStartMs = state.rrSelectedIntervalStartMs === null
+    ? latestPublished?.windowStartElapsedMs ?? currentWindowStartMs
+    : state.rrSelectedIntervalStartMs;
   const selected =
-    intervals.find((item) => item.startElapsedMs === state.rrSelectedIntervalStartMs) ??
+    intervals.find((item) => item.startElapsedMs === targetStartMs) ??
     intervals[intervals.length - 1];
-  state.rrSelectedIntervalStartMs = selected.startElapsedMs;
-  const window = await fetchIntervalWindow(session.sessionId, selected.startElapsedMs, "rr");
+  const activeStartElapsedMs = selected?.startElapsedMs ?? targetStartMs;
+  state.rrSelectedIntervalStartMs = activeStartElapsedMs;
+  const window = await fetchIntervalWindow(session.sessionId, activeStartElapsedMs, "rr");
+  const market = options.refreshOnchain
+    ? latestPublished && latestPublished.windowStartElapsedMs === activeStartElapsedMs
+      ? await loadIntervalMarket(latestPublished)
+      : await loadMatchingIntervalMarket("rr", activeStartElapsedMs)
+    : state.rrIntervalMarket && Number(state.rrIntervalMarket.intervalStartElapsedMs) === activeStartElapsedMs
+      ? state.rrIntervalMarket
+      : null;
   state.rrIntervalSamples = window.samples.map((sample) => telemetrySampleFromIntervalPoint(sample, "rr"));
   state.rrIntervalReferenceMs = window.referenceValue;
   state.rrIntervalCurrentMs = window.currentValue ?? state.rrIntervalSamples[state.rrIntervalSamples.length - 1]?.rrLatestMs ?? window.referenceValue;
   state.rrIntervalViewRange = {
-    startElapsedMs: selected.startElapsedMs,
-    endElapsedMs: selected.endElapsedMs,
+    startElapsedMs: activeStartElapsedMs,
+    endElapsedMs: activeStartElapsedMs + LIVE_INTERVAL_MS,
   };
-  state.rrIntervalMarket = await loadMatchingIntervalMarket("rr", selected.startElapsedMs);
+  state.rrIntervalMarket = market;
   renderRrIntervalHero();
   accumulateRrDistribution(state.rrIntervalSamples);
   renderRrDistribution();
 }
 
-async function refreshStepsIntervalExperience() {
+async function refreshStepsIntervalExperience(options: { refreshOnchain?: boolean } = { refreshOnchain: true }) {
   if (isAdminRoute) {
     return;
   }
@@ -2203,19 +4083,30 @@ async function refreshStepsIntervalExperience() {
     return;
   }
 
+  const latestPublished = latestPublishedIntervalRegistryRecord("steps");
+  const currentWindowStartMs = currentRollingIntervalStartElapsedMs(session);
+  const targetStartMs = currentWindowStartMs;
   const selected =
-    intervals.find((item) => item.startElapsedMs === state.stepsSelectedIntervalStartMs) ??
+    intervals.find((item) => item.startElapsedMs === targetStartMs) ??
     intervals[intervals.length - 1];
-  state.stepsSelectedIntervalStartMs = selected.startElapsedMs;
-  const window = await fetchIntervalWindow(session.sessionId, selected.startElapsedMs, "steps");
+  const activeStartElapsedMs = selected?.startElapsedMs ?? targetStartMs;
+  state.stepsSelectedIntervalStartMs = activeStartElapsedMs;
+  const window = await fetchIntervalWindow(session.sessionId, activeStartElapsedMs, "steps");
+  const market = options.refreshOnchain
+    ? latestPublished && latestPublished.windowStartElapsedMs === activeStartElapsedMs
+      ? await loadIntervalMarket(latestPublished)
+      : await loadMatchingIntervalMarket("steps", activeStartElapsedMs)
+    : state.stepsIntervalMarket && Number(state.stepsIntervalMarket.intervalStartElapsedMs) === activeStartElapsedMs
+      ? state.stepsIntervalMarket
+      : null;
   state.stepsIntervalSamples = window.samples.map((sample) => telemetrySampleFromIntervalPoint(sample, "steps"));
   state.stepsIntervalReference = window.referenceValue;
   state.stepsIntervalCurrent = window.currentValue ?? state.stepsIntervalSamples[state.stepsIntervalSamples.length - 1]?.steps ?? window.referenceValue;
   state.stepsIntervalViewRange = {
-    startElapsedMs: selected.startElapsedMs,
-    endElapsedMs: selected.endElapsedMs,
+    startElapsedMs: activeStartElapsedMs,
+    endElapsedMs: activeStartElapsedMs + LIVE_INTERVAL_MS,
   };
-  state.stepsIntervalMarket = await loadMatchingIntervalMarket("steps", selected.startElapsedMs);
+  state.stepsIntervalMarket = market;
   renderStepsIntervalHero();
 }
 
@@ -2233,8 +4124,8 @@ function renderRrIntervalHero() {
 
   const session = selectedSession();
   if (!session || !state.rrIntervalViewRange) {
-    title.textContent = "Live 5-minute RR interval";
-    subtitle.textContent = "Waiting for live RR session...";
+    title.textContent = `Live ${LIVE_INTERVAL_LABEL} RR interval`;
+    subtitle.textContent = t("trade.waiting.rr");
     reference.textContent = "--";
     current.textContent = "--";
     tabs.innerHTML = "";
@@ -2247,9 +4138,10 @@ function renderRrIntervalHero() {
 
   const intervals = buildRrIntervalOptions(session);
   const selected = intervals.find((item) => item.startElapsedMs === state.rrIntervalViewRange?.startElapsedMs) ?? intervals[intervals.length - 1];
-  title.textContent = "Live 5-minute RR interval";
+  const rrHeroReference = activeIntervalReferenceForMetric("rr");
+  title.textContent = `Live ${LIVE_INTERVAL_LABEL} RR interval`;
   subtitle.textContent = `Window ${formatIntervalSubtitle(selected.startAt, selected.endAt)}`;
-  reference.textContent = state.rrIntervalReferenceMs ? `${state.rrIntervalReferenceMs} ms` : "--";
+  reference.textContent = rrHeroReference ? `${rrHeroReference} ms` : "--";
   current.textContent = state.rrIntervalCurrentMs ? `${state.rrIntervalCurrentMs} ms` : "--";
   tabs.innerHTML = intervals.map((interval) => (
     `<button class="interval-tab${interval.startElapsedMs === selected.startElapsedMs ? " active" : ""}" id="rr-interval-tab-${interval.startElapsedMs}">
@@ -2262,7 +4154,7 @@ function renderRrIntervalHero() {
       void refreshRrIntervalExperience();
     });
   }
-  chart.innerHTML = renderIntervalChart(state.rrIntervalSamples, state.rrIntervalReferenceMs, "rr");
+  chart.innerHTML = renderIntervalChart(state.rrIntervalSamples, rrHeroReference, "rr");
   renderRrIntervalCountdown();
   renderRrIntervalTradePanel();
 }
@@ -2327,7 +4219,7 @@ function renderRrIntervalTradePanel() {
   const chosenEstimate = estimateIntervalPayout(market, state.rrIntervalSelectedSide === "above", amount || 1);
   const profit = chosenEstimate - (amount || 1);
   tradeButton.textContent = "Enter RR interval position";
-  returnCopy.textContent = `${state.rrIntervalSelectedSide === "above" ? "Above" : "Below"} is pricing at ${(state.rrIntervalSelectedSide === "above" ? yesEstimate : noEstimate).toFixed(2)}x. A ${amount || 1} ${COLLATERAL_SYMBOL} position would return about ${chosenEstimate.toFixed(2)} ${COLLATERAL_SYMBOL} if correct (${profit >= 0 ? "+" : ""}${profit.toFixed(2)}).`;
+  returnCopy.textContent = `${state.rrIntervalSelectedSide === "above" ? "Above" : "Below"} is pricing at ${(state.rrIntervalSelectedSide === "above" ? yesEstimate : noEstimate).toFixed(2)}x. A ${amount || 1} ${TRADING_UNIT_LABEL} position would return about ${chosenEstimate.toFixed(2)} ${TRADING_UNIT_LABEL} if correct (${profit >= 0 ? "+" : ""}${profit.toFixed(2)}). ${intervalStakeSummary(market, "RR")}`;
 }
 
 function renderStepsIntervalHero() {
@@ -2344,13 +4236,13 @@ function renderStepsIntervalHero() {
 
   const session = selectedSession();
   if (!session || !state.stepsIntervalViewRange) {
-    title.textContent = "Live 5-minute steps interval";
-    subtitle.textContent = "Waiting for live steps session...";
+    title.textContent = `Live ${LIVE_INTERVAL_LABEL} steps interval`;
+    subtitle.textContent = t("trade.waiting.steps");
     reference.textContent = "--";
     current.textContent = "--";
     tabs.innerHTML = "";
     chart.innerHTML = "";
-    returnCopy.textContent = "The steps market will open automatically once live steps telemetry starts flowing from the event.";
+    returnCopy.textContent = "";
     renderStepsIntervalCountdown();
     renderStepsIntervalTradePanel();
     return;
@@ -2358,9 +4250,10 @@ function renderStepsIntervalHero() {
 
   const intervals = buildStepsIntervalOptions(session);
   const selected = intervals.find((item) => item.startElapsedMs === state.stepsIntervalViewRange?.startElapsedMs) ?? intervals[intervals.length - 1];
-  title.textContent = "Live 5-minute steps interval";
+  const stepsHeroReference = activeIntervalReferenceForMetric("steps");
+  title.textContent = `Live ${LIVE_INTERVAL_LABEL} steps interval`;
   subtitle.textContent = `Window ${formatIntervalSubtitle(selected.startAt, selected.endAt)}`;
-  reference.textContent = state.stepsIntervalReference !== null ? `${state.stepsIntervalReference} steps` : "--";
+  reference.textContent = stepsHeroReference !== null ? `${stepsHeroReference} steps` : "--";
   current.textContent = state.stepsIntervalCurrent !== null ? `${state.stepsIntervalCurrent} steps` : "--";
   tabs.innerHTML = intervals.map((interval) => (
     `<button class="interval-tab${interval.startElapsedMs === selected.startElapsedMs ? " active" : ""}" id="steps-interval-tab-${interval.startElapsedMs}">
@@ -2373,9 +4266,10 @@ function renderStepsIntervalHero() {
       void refreshStepsIntervalExperience();
     });
   }
-  chart.innerHTML = renderIntervalChart(state.stepsIntervalSamples, state.stepsIntervalReference, "steps");
+  chart.innerHTML = renderIntervalChart(state.stepsIntervalSamples, stepsHeroReference, "steps");
   renderStepsIntervalCountdown();
   renderStepsIntervalTradePanel();
+  renderAccountOpenPositions();
 }
 
 function renderStepsIntervalCountdown() {
@@ -2406,7 +4300,6 @@ function renderStepsIntervalTradePanel() {
   }
 
   const market = currentStepsIntervalMarket();
-  const amount = parseNumberInput("steps-interval-trade-amount") ?? 0;
   const yesEstimate = market ? estimateIntervalPayout(market, true, 1) : 0;
   const noEstimate = market ? estimateIntervalPayout(market, false, 1) : 0;
   aboveMultiplier.textContent = market ? `${yesEstimate.toFixed(2)}x` : "--";
@@ -2417,8 +4310,8 @@ function renderStepsIntervalTradePanel() {
   belowButton.classList.toggle("secondary", state.stepsIntervalSelectedSide !== "below");
   tradeButton.disabled = !market || (market.status !== 0 && !intervalClaimable(market));
   if (!market) {
-    returnCopy.textContent = "No onchain steps interval market is open yet. The next 5-minute steps market will publish automatically while the session is live.";
-    tradeButton.textContent = "Current interval unavailable";
+    returnCopy.textContent = "";
+    tradeButton.textContent = "Enter position";
     return;
   }
   if (market.status === 1) {
@@ -2435,10 +4328,8 @@ function renderStepsIntervalTradePanel() {
     tradeButton.textContent = "Interval unavailable";
     return;
   }
-  const chosenEstimate = estimateIntervalPayout(market, state.stepsIntervalSelectedSide === "above", amount || 1);
-  const profit = chosenEstimate - (amount || 1);
-  tradeButton.textContent = "Enter steps interval position";
-  returnCopy.textContent = `${state.stepsIntervalSelectedSide === "above" ? "Above" : "Below"} is pricing at ${(state.stepsIntervalSelectedSide === "above" ? yesEstimate : noEstimate).toFixed(2)}x. A ${amount || 1} ${COLLATERAL_SYMBOL} position would return about ${chosenEstimate.toFixed(2)} ${COLLATERAL_SYMBOL} if correct (${profit >= 0 ? "+" : ""}${profit.toFixed(2)}).`;
+  tradeButton.textContent = "Enter position";
+  returnCopy.textContent = "";
 }
 
 function renderSettlementOptions() {
@@ -2456,6 +4347,89 @@ function renderSettlementOptions() {
     .join("");
 }
 
+function positionChipMarkup() {
+  const chips: string[] = [];
+  const seen = new Set<string>();
+  const pushChip = (key: string, chip: string) => {
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    chips.push(chip);
+  };
+  for (const prediction of state.pendingPredictions.values()) {
+    const side = prediction.isAbove ? "Above" : "Below";
+    pushChip(
+      `interval:${prediction.metric}:${prediction.marketId.toString()}:${side}`,
+      `<div class="wager-chip is-pending"><strong>${escapeHtml(prediction.metricLabel)}</strong><span>Confirming interval #${prediction.marketId.toString()}</span><em>${side}</em></div>`,
+    );
+  }
+  for (const market of state.markets.filter((item) => item.myYesShares > 0n || item.myNoShares > 0n)) {
+    const meta = state.marketMeta.get(Number(market.id));
+    const session = market.sessionId ? state.sessions.find((item) => item.sessionId === market.sessionId) ?? null : null;
+    const title = marketTitle(market, meta, formatMarketSchedule(session, market.t));
+    if (market.myYesShares > 0n) {
+      pushChip(`threshold:${market.id.toString()}:yes`, `<div class="wager-chip"><strong>#${market.id.toString()}</strong><span>${title}</span><em>${isDirectionalInterval(meta) ? "Above" : "Yes"}</em></div>`);
+    }
+    if (market.myNoShares > 0n) {
+      pushChip(`threshold:${market.id.toString()}:no`, `<div class="wager-chip"><strong>#${market.id.toString()}</strong><span>${title}</span><em>${isDirectionalInterval(meta) ? "Below" : "No"}</em></div>`);
+    }
+  }
+  for (const market of [state.intervalMarket, state.stepsIntervalMarket, state.rrIntervalMarket]) {
+    if (!market || (market.myAboveStake <= 0n && market.myBelowStake <= 0n)) {
+      continue;
+    }
+    const metricLabel = market.metric === "steps" ? "Steps" : market.metric === "rr" ? "RR" : "HR";
+    const isSettled = market.status === 1;
+    if (market.myAboveStake > 0n) {
+      const won = isSettled && market.settledOutcomeAbove;
+      const outcomeHtml = isSettled ? `<strong class="${won ? "chip-won" : "chip-lost"}">${won ? t("account.won") : t("account.lost")}</strong>` : "";
+      pushChip(`interval:${market.metric}:${market.id.toString()}:Above`, `<div class="wager-chip${isSettled ? (won ? " is-won" : " is-lost") : ""}"><strong>${metricLabel}</strong><span>Interval #${market.id.toString()}</span><em>${t("trade.above")}</em>${outcomeHtml}</div>`);
+    }
+    if (market.myBelowStake > 0n) {
+      const won = isSettled && !market.settledOutcomeAbove;
+      const outcomeHtml = isSettled ? `<strong class="${won ? "chip-won" : "chip-lost"}">${won ? t("account.won") : t("account.lost")}</strong>` : "";
+      pushChip(`interval:${market.metric}:${market.id.toString()}:Below`, `<div class="wager-chip${isSettled ? (won ? " is-won" : " is-lost") : ""}"><strong>${metricLabel}</strong><span>Interval #${market.id.toString()}</span><em>${t("trade.below")}</em>${outcomeHtml}</div>`);
+    }
+  }
+  for (const trade of state.spectatorTrades) {
+    const isSettled = trade.status === "settled";
+    const metricLabel = trade.metric === "HR" ? "Heart Rate" : trade.metric;
+    const userWon = isSettled && trade.settledOutcomeAbove != null &&
+      ((trade.side === "Above" && trade.settledOutcomeAbove) || (trade.side === "Below" && !trade.settledOutcomeAbove));
+    const outcomeHtml = isSettled ? `<strong class="${userWon ? "chip-won" : "chip-lost"}">${userWon ? t("account.won") : t("account.lost")}</strong>` : "";
+    pushChip(
+      `ledger:${trade.kind}:${trade.marketId}:${trade.side}`,
+      `<div class="wager-chip${isSettled ? (userWon ? " is-won" : " is-lost") : ""}"><strong>${escapeHtml(metricLabel)}</strong><span>${escapeHtml(trade.marketLabel)}</span><em>${escapeHtml(trade.side)}</em>${outcomeHtml}</div>`,
+    );
+  }
+  return chips;
+}
+
+function renderAccountOpenPositions() {
+  const target = document.querySelector<HTMLElement>("#account-open-positions");
+  if (!target) {
+    return;
+  }
+  const chips = positionChipMarkup();
+  target.innerHTML = chips.length === 0
+    ? `<div class="account-empty-position">${t("account.nopositions")}</div>`
+    : `
+      <div class="account-position-head">
+        <span>${t("account.positions")}</span>
+        <strong>${chips.length}</strong>
+      </div>
+      <div class="account-position-list">${chips.join("")}</div>
+    `;
+}
+
+function updateNudgeAnimation() {
+  const hasPrediction = positionChipMarkup().length > 0;
+  document.querySelectorAll<HTMLElement>(".trade-side").forEach((btn) => {
+    btn.classList.toggle("nudge-shine", !hasPrediction);
+  });
+}
+
 function renderMarkets() {
   const grid = document.querySelector<HTMLElement>("#market-grid");
   const count = document.querySelector<HTMLElement>("#market-count");
@@ -2465,8 +4439,8 @@ function renderMarkets() {
   }
   count.textContent = `${state.markets.length} markets`;
   if (wagers) {
-    const myMarkets = state.markets.filter((market) => market.myYesShares > 0n || market.myNoShares > 0n);
-    wagers.innerHTML = myMarkets.length === 0
+    const chips = positionChipMarkup();
+    wagers.innerHTML = chips.length === 0
       ? `
         <div class="rail-empty">
           <strong>No open positions</strong>
@@ -2477,26 +4451,15 @@ function renderMarkets() {
         <div class="wagers-panel">
           <div class="section-head">
             <h3>Open positions</h3>
-            <span class="meta-label">${myMarkets.length}</span>
+            <span class="meta-label">${chips.length}</span>
           </div>
           <div class="wager-list">
-            ${myMarkets.flatMap((market) => {
-              const meta = state.marketMeta.get(Number(market.id));
-              const session = market.sessionId ? state.sessions.find((item) => item.sessionId === market.sessionId) ?? null : null;
-              const title = marketTitle(market, meta, formatMarketSchedule(session, market.t));
-              const chips: string[] = [];
-              if (market.myYesShares > 0n) {
-                chips.push(`<div class="wager-chip"><strong>#${market.id.toString()}</strong><span>${title}</span><em>${isDirectionalInterval(meta) ? "Above" : "Yes"}</em></div>`);
-              }
-              if (market.myNoShares > 0n) {
-                chips.push(`<div class="wager-chip"><strong>#${market.id.toString()}</strong><span>${title}</span><em>${isDirectionalInterval(meta) ? "Below" : "No"}</em></div>`);
-              }
-              return chips;
-            }).join("")}
+            ${chips.join("")}
           </div>
         </div>
       `;
   }
+  renderAccountOpenPositions();
   grid.innerHTML = state.markets.length === 0
     ? `
       <div class="market-empty">
@@ -2518,6 +4481,85 @@ function renderMarkets() {
   }
 }
 
+function renderAdminTrades() {
+  const target = document.querySelector<HTMLElement>("#admin-trades");
+  if (!target) {
+    return;
+  }
+  if (state.adminTradesStatus === "loading") {
+    target.innerHTML = `
+      <div class="admin-trade-skeleton"></div>
+      <div class="admin-trade-skeleton"></div>
+      <div class="admin-trade-skeleton"></div>
+    `;
+    return;
+  }
+  if (state.adminTradesStatus === "error") {
+    target.innerHTML = `
+      <div class="admin-trade-state">
+        <strong>Couldn't load trades</strong>
+        <p>${escapeHtml(state.adminTradesError ?? "The trade feed is temporarily unavailable.")}</p>
+        <button id="admin-trades-retry" class="secondary" type="button">Try again</button>
+      </div>
+    `;
+    bindClick("admin-trades-retry", () => refreshAdminTrades());
+    return;
+  }
+  if (state.adminTrades.length === 0) {
+    target.innerHTML = `
+      <div class="admin-trade-state">
+        <strong>No trades recorded yet</strong>
+        <p>Once a user enters a position, the onchain event will appear here with wallet and market details.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const totalAmount = state.adminTrades.reduce((sum, trade) => sum + Number(trade.amountFormatted || 0), 0);
+  const uniqueUsers = new Set(state.adminTrades.map((trade) => trade.account.toLowerCase())).size;
+  target.innerHTML = `
+    <div class="admin-trade-summary">
+      <div><span>Total trades</span><strong>${state.adminTrades.length}</strong></div>
+      <div><span>Unique wallets</span><strong>${uniqueUsers}</strong></div>
+      <div><span>Total staked</span><strong>${totalAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${TRADING_UNIT_LABEL}</strong></div>
+    </div>
+    <div class="admin-trade-list">
+      ${state.adminTrades.map((trade) => adminTradeRow(trade)).join("")}
+    </div>
+  `;
+}
+
+function adminTradeRow(trade: AdminTradeRecord) {
+  const sessionLabel = trade.sessionId
+    ? `${trade.sessionId.slice(0, 8)}...`
+    : "No session";
+  const outcome = trade.settledOutcomeAbove === null || trade.settledOutcomeAbove === undefined
+    ? ""
+    : `<span class="admin-trade-outcome">Settled ${trade.settledOutcomeAbove ? "Above" : "Below"}${trade.settledObservedValue !== null && trade.settledObservedValue !== undefined ? ` at ${trade.settledObservedValue}` : ""}</span>`;
+  return `
+    <article class="admin-trade-row">
+      <div class="admin-trade-main">
+        <div>
+          <strong>${shortenAddress(trade.account)}</strong>
+          <span>${shortenAddress(trade.account)} · ${escapeHtml(sessionLabel)}</span>
+        </div>
+        <a href="${ARC_TESTNET_EXPLORER_URL}/tx/${trade.txHash}" target="_blank" rel="noopener noreferrer">${shortenHash(trade.txHash)}</a>
+      </div>
+      <div class="admin-trade-details">
+        <span>${escapeHtml(trade.kind)}</span>
+        <span>#${trade.marketId} · ${escapeHtml(trade.metric)}</span>
+        <span>${escapeHtml(trade.side)}</span>
+        <strong>${escapeHtml(trade.amountFormatted)} ${TRADING_UNIT_LABEL}</strong>
+      </div>
+      <div class="admin-trade-meta">
+        <span>${escapeHtml(trade.marketLabel)}</span>
+        <span>${trade.blockNumber ? `Block ${escapeHtml(trade.blockNumber)}` : "Block pending"}</span>
+        ${outcome}
+      </div>
+    </article>
+  `;
+}
+
 function renderIntervalHero() {
   const title = document.querySelector<HTMLElement>("#interval-title");
   const subtitle = document.querySelector<HTMLElement>("#interval-subtitle");
@@ -2532,8 +4574,8 @@ function renderIntervalHero() {
 
   const session = selectedSession();
   if (!session || !state.intervalViewRange) {
-    title.textContent = "Live 5-minute interval";
-    subtitle.textContent = "Waiting for live session...";
+    title.textContent = `Live ${LIVE_INTERVAL_LABEL} interval`;
+    subtitle.textContent = t("trade.waiting.hr");
     reference.textContent = "--";
     current.textContent = "--";
     tabs.innerHTML = "";
@@ -2547,9 +4589,10 @@ function renderIntervalHero() {
 
   const intervals = buildIntervalOptions(session);
   const selected = intervals.find((item) => item.startElapsedMs === state.intervalViewRange?.startElapsedMs) ?? intervals[intervals.length - 1];
-  title.textContent = "Live 5-minute interval";
+  const heroReference = activeIntervalReferenceForMetric("hr");
+  title.textContent = `Live ${LIVE_INTERVAL_LABEL} interval`;
   subtitle.textContent = `Window ${formatIntervalSubtitle(selected.startAt, selected.endAt)}`;
-  reference.textContent = state.intervalReferenceBpm ? `${state.intervalReferenceBpm} bpm` : "--";
+  reference.textContent = heroReference ? `${heroReference} bpm` : "--";
   current.textContent = state.intervalCurrentBpm ? `${state.intervalCurrentBpm} bpm` : "--";
   tabs.innerHTML = intervals.map((interval) => (
     `<button class="interval-tab${interval.startElapsedMs === selected.startElapsedMs ? " active" : ""}" id="interval-tab-${interval.startElapsedMs}">
@@ -2558,14 +4601,15 @@ function renderIntervalHero() {
   )).join("");
   for (const interval of intervals) {
     bindClick(`interval-tab-${interval.startElapsedMs}`, () => {
-      // The live trade panel always snaps back to the latest open 5-minute interval on refresh.
+      // The live trade panel always snaps back to the latest open interval on refresh.
       state.selectedIntervalStartMs = interval.startElapsedMs;
       void refreshIntervalExperience();
     });
   }
-  chart.innerHTML = renderIntervalChart(state.intervalSamples, state.intervalReferenceBpm, "hr");
+  chart.innerHTML = renderIntervalChart(state.intervalSamples, heroReference, "hr");
   renderIntervalCountdown();
   renderIntervalTradePanel();
+  renderAccountOpenPositions();
   renderBroadcastSummary();
 }
 
@@ -2597,7 +4641,6 @@ function renderIntervalTradePanel() {
   }
 
   const market = currentIntervalMarket();
-  const amount = parseNumberInput("interval-trade-amount") ?? 0;
   const yesEstimate = market ? estimateIntervalPayout(market, true, 1) : 0;
   const noEstimate = market ? estimateIntervalPayout(market, false, 1) : 0;
   aboveMultiplier.textContent = market ? `${yesEstimate.toFixed(2)}x` : "--";
@@ -2608,28 +4651,26 @@ function renderIntervalTradePanel() {
   belowButton.classList.toggle("secondary", state.intervalSelectedSide !== "below");
   tradeButton.disabled = !market || (market.status !== 0 && !intervalClaimable(market));
   if (!market) {
-    returnCopy.textContent = "No onchain interval market is open yet. Keep the CRE automation loop running and the next interval will publish automatically.";
-    tradeButton.textContent = "Current interval unavailable";
+    returnCopy.textContent = "";
+    tradeButton.textContent = t("trade.submit");
     return;
   }
   if (market.status === 1) {
     const claimable = intervalClaimable(market);
     returnCopy.textContent = claimable
-      ? `This interval is settled. Your ${market.settledOutcomeAbove ? "Above" : "Below"} position can now be claimed.`
-      : `This interval settled ${market.settledOutcomeAbove ? "Above" : "Below"} at ${market.observedValue.toString()} bpm.`;
-    tradeButton.textContent = claimable ? "Claim payout" : "Interval settled";
+      ? `This interval is settled. Your ${market.settledOutcomeAbove ? t("trade.above") : t("trade.below")} position can now be claimed.`
+      : `This interval settled ${market.settledOutcomeAbove ? t("trade.above") : t("trade.below")} at ${market.observedValue.toString()} bpm.`;
+    tradeButton.textContent = claimable ? t("modal.claim") : t("trade.settled");
     tradeButton.disabled = !claimable;
     return;
   }
   if (market.status !== 0) {
-    returnCopy.textContent = "This interval is not open.";
-    tradeButton.textContent = "Interval unavailable";
+    returnCopy.textContent = "";
+    tradeButton.textContent = t("trade.unavailable");
     return;
   }
-  const chosenEstimate = estimateIntervalPayout(market, state.intervalSelectedSide === "above", amount || 1);
-  const profit = chosenEstimate - (amount || 1);
-  tradeButton.textContent = "Enter interval position";
-  returnCopy.textContent = `${state.intervalSelectedSide === "above" ? "Above" : "Below"} is pricing at ${(state.intervalSelectedSide === "above" ? yesEstimate : noEstimate).toFixed(2)}x. A ${amount || 1} ${COLLATERAL_SYMBOL} position would return about ${chosenEstimate.toFixed(2)} ${COLLATERAL_SYMBOL} if correct (${profit >= 0 ? "+" : ""}${profit.toFixed(2)}).`;
+  tradeButton.textContent = t("trade.submit");
+  returnCopy.textContent = "";
 }
 
 function marketCard(market: MarketRecord) {
@@ -2650,11 +4691,11 @@ function marketCard(market: MarketRecord) {
         <div class="market-status status-${market.status}" data-close-at="${closeMeta}" id="countdown-${market.id.toString()}">${countdownLabel(market, closeAtMs)}</div>
       </div>
       <div class="odds-grid compact-grid">
-        <div><span>${meta?.type === "rr_interval_direction" ? "Reference RR" : meta?.type === "steps_interval_direction" ? "Reference Steps" : isInterval ? "Reference HR" : "Total pool"}</span><strong>${isInterval ? intervalReferenceLabel(meta, market) : `${formatDisplay(market.yesPool + market.noPool)} ${COLLATERAL_SYMBOL}`}</strong></div>
+        <div><span>${meta?.type === "rr_interval_direction" ? "Reference RR" : meta?.type === "steps_interval_direction" ? "Reference Steps" : isInterval ? "Reference HR" : "Total pool"}</span><strong>${isInterval ? intervalReferenceLabel(meta, market) : `${formatDisplay(market.yesPool + market.noPool)} ${TRADING_UNIT_LABEL}`}</strong></div>
       </div>
       <div class="bet-row">
         <label class="stacked-input">
-          <span>Position size (${COLLATERAL_SYMBOL})</span>
+          <span>Position size (${TRADING_UNIT_LABEL})</span>
           <input id="amount-${market.id.toString()}" class="text-input slim" type="number" min="1" step="1" value="10" />
         </label>
         <button id="yes-${market.id.toString()}">${isInterval ? "Above" : "Bet Yes"}</button>
@@ -2716,7 +4757,7 @@ function hashSessionId(sessionId: string) {
   return keccak256(stringToHex(sessionId));
 }
 
-function hashMetricSessionId(sessionId: string, metric: "hr" | "rr") {
+function hashMetricSessionId(sessionId: string, metric: "hr" | "rr" | "steps") {
   return metric === "hr" ? hashSessionId(sessionId) : hashSessionId(`${metric}:${sessionId}`);
 }
 
@@ -2773,6 +4814,18 @@ function bindInput(id: string, handler: () => void) {
   element.addEventListener("change", handler);
 }
 
+function setBusy(id: string, busy: boolean) {
+  const element = document.getElementById(id);
+  if (!element) {
+    return;
+  }
+  if (busy) {
+    element.setAttribute("aria-busy", "true");
+  } else {
+    element.removeAttribute("aria-busy");
+  }
+}
+
 function readInputValue(id: string) {
   const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
   return element?.value.trim() ?? "";
@@ -2799,6 +4852,15 @@ function userFacingErrorMessage(error: unknown, fallback: string) {
   }
   const message = error.message.trim();
   const lower = message.toLowerCase();
+  if (lower.includes("nonce too low")) {
+    return "A previous wallet transaction is still pending. Confirm it in MetaMask or wait, then try again.";
+  }
+  if (lower.includes("already known")) {
+    return "That wallet transaction is already pending in MetaMask.";
+  }
+  if (lower.includes("replacement transaction underpriced")) {
+    return "A previous wallet transaction is still pending. Confirm or replace it in MetaMask, then retry.";
+  }
   if (
     lower.includes("user rejected") ||
     lower.includes("rejected the request") ||
@@ -2853,9 +4915,8 @@ function broadcastMediaMarkup() {
   if (!hasConfiguredBroadcast()) {
     return `
       <div class="video-placeholder">
-        <div class="video-placeholder-kicker">Broadcast standby</div>
-        <strong>Live video is being prepared.</strong>
-        <p>The stream will appear here once the event feed is configured. The signal rail and interval market will keep updating below.</p>
+        <div class="video-placeholder-kicker">${t("broadcast.standby.kicker")}</div>
+        <strong>${t("broadcast.standby.title")}</strong>
       </div>
     `;
   }
@@ -2881,7 +4942,7 @@ function renderBroadcastMedia() {
 }
 
 function formatDisplay(value: bigint) {
-  return Number(formatUnits(value, COLLATERAL_DECIMALS)).toFixed(2);
+  return Number(formatUnits(value, TRADING_UNIT_DECIMALS)).toFixed(2);
 }
 
 function formatElapsed(ms: bigint) {
@@ -3007,10 +5068,10 @@ function marketTitle(market: MarketRecord, meta: MarketMeta | undefined, settlem
     return `RR above or below ${meta.referenceRrMs ?? market.thresholdValue} ms at ${settlementLabel}`;
   }
   if (meta?.type === "steps_interval_direction") {
-    return `Steps above or below ${meta.referenceSteps ?? market.thresholdValue} over 5 minutes ending at ${settlementLabel}`;
+    return `Steps above or below ${meta.referenceSteps ?? market.thresholdValue} over ${LIVE_INTERVAL_MINUTES} minutes ending at ${settlementLabel}`;
   }
   if (meta?.type === "steps_threshold_window") {
-    return `Steps ${meta.direction === "under" ? "below" : "above"} ${meta.threshold} over 5 minutes ending at ${settlementLabel}`;
+    return `Steps ${meta.direction === "under" ? "below" : "above"} ${meta.threshold} over ${LIVE_INTERVAL_MINUTES} minutes ending at ${settlementLabel}`;
   }
   return statementLabel(market.thresholdDirection, market.thresholdValue, settlementLabel, market.signalType, meta);
 }
@@ -3052,11 +5113,11 @@ function updateMarketEstimate(marketId: bigint) {
   const noEstimate = estimatePayout(market, false, stake);
   const yesProfit = yesEstimate - stake;
   const noProfit = noEstimate - stake;
-  target.textContent = `Estimated total payout if correct: Yes ~${yesEstimate.toFixed(2)} ${COLLATERAL_SYMBOL} (profit ${yesProfit >= 0 ? "+" : ""}${yesProfit.toFixed(2)}), No ~${noEstimate.toFixed(2)} ${COLLATERAL_SYMBOL} (profit ${noProfit >= 0 ? "+" : ""}${noProfit.toFixed(2)}).`;
+  target.textContent = `Estimated total payout if correct: Yes ~${yesEstimate.toFixed(2)} ${TRADING_UNIT_LABEL} (profit ${yesProfit >= 0 ? "+" : ""}${yesProfit.toFixed(2)}), No ~${noEstimate.toFixed(2)} ${TRADING_UNIT_LABEL} (profit ${noProfit >= 0 ? "+" : ""}${noProfit.toFixed(2)}).`;
 }
 
 function estimatePayout(market: MarketRecord, isYes: boolean, stake: number) {
-  const collateralIn = parseUnits(String(stake), COLLATERAL_DECIMALS);
+  const collateralIn = parseUnits(String(stake), TRADING_UNIT_DECIMALS);
   const yesPool = market.yesPool;
   const noPool = market.noPool;
   if (collateralIn <= 0n || yesPool <= 0n || noPool <= 0n) {
@@ -3080,7 +5141,7 @@ function estimatePayout(market: MarketRecord, isYes: boolean, stake: number) {
   if (sharesOut <= 0n || totalWinningShares <= 0n) {
     return 0;
   }
-  return Number(formatUnits((totalCollateral * sharesOut) / totalWinningShares, COLLATERAL_DECIMALS));
+  return Number(formatUnits((totalCollateral * sharesOut) / totalWinningShares, TRADING_UNIT_DECIMALS));
 }
 
 function currentIntervalMarket() {
@@ -3097,9 +5158,11 @@ function currentStepsIntervalMarket() {
 
 function buildIntervalOptionsFor(session: TelemetrySession, selectedIntervalStartMs: number | null, inWindowElapsedMs: number | null) {
   const startedAt = new Date(session.clientStartedAt ?? session.createdAt);
-  const latestKnownElapsedMs = session.lastElapsedMs ?? inWindowElapsedMs ?? Math.max(0, Date.now() - startedAt.getTime());
-  const latestSampleElapsedMs = Math.max(latestKnownElapsedMs, inWindowElapsedMs ?? 0);
-  const intervalMs = 5 * 60_000;
+  const wallClockElapsedMs = Math.max(0, Date.now() - startedAt.getTime());
+  const latestSampleElapsedMs = session.status === "active"
+    ? Math.max(session.lastElapsedMs ?? 0, inWindowElapsedMs ?? 0, wallClockElapsedMs)
+    : Math.max(session.lastElapsedMs ?? 0, inWindowElapsedMs ?? 0);
+  const intervalMs = LIVE_INTERVAL_MS;
   const currentStart = Math.floor(latestSampleElapsedMs / intervalMs) * intervalMs;
   const options: Array<{ startElapsedMs: number; endElapsedMs: number; startAt: Date; endAt: Date }> = [];
   for (let offset = 3; offset >= 0; offset -= 1) {
@@ -3129,6 +5192,15 @@ function buildIntervalOptionsFor(session: TelemetrySession, selectedIntervalStar
     });
   }
   return options.sort((left, right) => left.startElapsedMs - right.startElapsedMs);
+}
+
+function currentRollingIntervalStartElapsedMs(session: TelemetrySession) {
+  const startedAt = new Date(session.clientStartedAt ?? session.createdAt);
+  const wallClockElapsedMs = Math.max(0, Date.now() - startedAt.getTime());
+  const latestElapsedMs = session.status === "active"
+    ? Math.max(session.lastElapsedMs ?? 0, wallClockElapsedMs)
+    : (session.lastElapsedMs ?? wallClockElapsedMs);
+  return Math.floor(latestElapsedMs / LIVE_INTERVAL_MS) * LIVE_INTERVAL_MS;
 }
 
 function buildIntervalOptions(session: TelemetrySession) {
@@ -3165,16 +5237,16 @@ function renderIntervalChart(samples: TelemetrySample[], referenceValue: number 
   if (samples.length === 0) {
     return `
       <rect x="0" y="0" width="720" height="260" fill="rgba(255,255,255,0.4)" rx="16"></rect>
-      <text x="50%" y="46%" text-anchor="middle" fill="rgba(17,17,17,0.66)" font-size="18" font-weight="700">Waiting for live ${metric === "rr" ? "RR" : metric === "steps" ? "steps" : "heart-rate"} samples</text>
-      <text x="50%" y="58%" text-anchor="middle" fill="rgba(17,17,17,0.48)" font-size="14">The chart will begin drawing as soon as telemetry arrives.</text>
+      <text x="50%" y="46%" text-anchor="middle" fill="rgba(17,17,17,0.66)" font-size="18" font-weight="700">${metric === "rr" ? t("trade.chart.waiting.rr") : metric === "steps" ? t("trade.chart.waiting.steps") : t("trade.chart.waiting.hr")}</text>
+      <text x="50%" y="58%" text-anchor="middle" fill="rgba(17,17,17,0.48)" font-size="14">${t("trade.chart.lede")}</text>
     `;
   }
   const valuedSamples = samples.filter((sample) => metricSampleValue(sample, metric) !== null);
   if (valuedSamples.length === 0) {
     return `
       <rect x="0" y="0" width="720" height="260" fill="rgba(255,255,255,0.4)" rx="16"></rect>
-      <text x="50%" y="46%" text-anchor="middle" fill="rgba(17,17,17,0.66)" font-size="18" font-weight="700">Waiting for live ${metric === "rr" ? "RR" : metric === "steps" ? "steps" : "heart-rate"} samples</text>
-      <text x="50%" y="58%" text-anchor="middle" fill="rgba(17,17,17,0.48)" font-size="14">The chart will begin drawing as soon as telemetry arrives.</text>
+      <text x="50%" y="46%" text-anchor="middle" fill="rgba(17,17,17,0.66)" font-size="18" font-weight="700">${metric === "rr" ? t("trade.chart.waiting.rr") : metric === "steps" ? t("trade.chart.waiting.steps") : t("trade.chart.waiting.hr")}</text>
+      <text x="50%" y="58%" text-anchor="middle" fill="rgba(17,17,17,0.48)" font-size="14">${t("trade.chart.lede")}</text>
     `;
   }
   const width = 720;
@@ -3246,85 +5318,133 @@ function nudgeStepsIntervalStake(amount: number) {
   renderStepsIntervalTradePanel();
 }
 
-function setIntervalStakeToMax() {
-  const input = document.querySelector<HTMLInputElement>("#interval-trade-amount");
-  if (!input) {
-    return;
-  }
-  input.value = String(Math.max(1, Math.floor(Number(formatUnits(state.balance, COLLATERAL_DECIMALS)))));
-  renderIntervalTradePanel();
-}
-
 function setRrIntervalStakeToMax() {
   const input = document.querySelector<HTMLInputElement>("#rr-interval-trade-amount");
   if (!input) {
     return;
   }
-  input.value = String(Math.max(1, Math.floor(Number(formatUnits(state.balance, COLLATERAL_DECIMALS)))));
+  input.value = String(Math.max(1, Math.floor(Number(formatUnits(state.balance, TRADING_UNIT_DECIMALS)))));
   renderRrIntervalTradePanel();
 }
 
-function setStepsIntervalStakeToMax() {
-  const input = document.querySelector<HTMLInputElement>("#steps-interval-trade-amount");
-  if (!input) {
-    return;
+async function withConfirmingElement<T>(
+  element: HTMLButtonElement,
+  label: string,
+  task: () => Promise<T> | T,
+) {
+  const previousText = element.textContent ?? "";
+  const previousDisabled = element.disabled;
+  element.disabled = true;
+  element.setAttribute("aria-busy", "true");
+  element.classList.add("is-confirming");
+  element.textContent = label;
+  try {
+    return await task();
+  } finally {
+    element.textContent = previousText;
+    element.disabled = previousDisabled;
+    element.removeAttribute("aria-busy");
+    element.classList.remove("is-confirming");
   }
-  input.value = String(Math.max(1, Math.floor(Number(formatUnits(state.balance, COLLATERAL_DECIMALS)))));
-  renderStepsIntervalTradePanel();
+}
+
+async function withConfirmingButton<T>(
+  buttonId: string,
+  label: string,
+  task: () => Promise<T> | T,
+) {
+  const button = document.querySelector<HTMLButtonElement>(`#${buttonId}`);
+  if (!button) {
+    return task();
+  }
+  return withConfirmingElement(button, label, task);
 }
 
 async function submitIntervalTrade() {
-  const market = currentIntervalMarket();
+  return withConfirmingButton("interval-trade-submit", "Confirming", async () => {
+  let market = currentIntervalMarket();
+  if (!market || market.status !== 0) {
+    await refreshIntervalExperience();
+    market = currentIntervalMarket();
+  }
   if (!market) {
-    setStatus("No active 5-minute interval market yet", "warning");
+    setStatus(`No active ${LIVE_INTERVAL_LABEL} interval market yet`, "warning");
     return;
   }
   if (market.status === 1 && intervalClaimable(market)) {
     await claimIntervalMarket(market.id, "hr");
     return;
   }
+  if (market.status !== 0) {
+    setStatus(`The current ${LIVE_INTERVAL_LABEL} HR interval is no longer open`, "warning");
+    return;
+  }
+  setStatus("Opening wallet for HR interval position…");
   await takeIntervalPosition(
     market.id,
     state.intervalSelectedSide === "above",
     "interval-trade-amount",
     "HR",
   );
+  });
 }
 
 async function submitRrIntervalTrade() {
-  const market = currentRrIntervalMarket();
+  return withConfirmingButton("rr-interval-trade-submit", "Confirming", async () => {
+  let market = currentRrIntervalMarket();
+  if (!market || market.status !== 0) {
+    await refreshRrIntervalExperience();
+    market = currentRrIntervalMarket();
+  }
   if (!market) {
-    setStatus("No active 5-minute RR interval market yet", "warning");
+    setStatus(`No active ${LIVE_INTERVAL_LABEL} RR interval market yet`, "warning");
     return;
   }
   if (market.status === 1 && intervalClaimable(market)) {
     await claimIntervalMarket(market.id, "rr");
     return;
   }
+  if (market.status !== 0) {
+    setStatus(`The current ${LIVE_INTERVAL_LABEL} RR interval is no longer open`, "warning");
+    return;
+  }
+  setStatus("Opening wallet for RR interval position…");
   await takeIntervalPosition(
     market.id,
     state.rrIntervalSelectedSide === "above",
     "rr-interval-trade-amount",
     "RR",
   );
+  });
 }
 
 async function submitStepsIntervalTrade() {
-  const market = currentStepsIntervalMarket();
+  return withConfirmingButton("steps-interval-trade-submit", "Confirming", async () => {
+  let market = currentStepsIntervalMarket();
+  if (!market || market.status !== 0) {
+    await refreshStepsIntervalExperience();
+    market = currentStepsIntervalMarket();
+  }
   if (!market) {
-    setStatus("No active 5-minute steps interval market yet", "warning");
+    setStatus(`No active ${LIVE_INTERVAL_LABEL} steps interval market yet`, "warning");
     return;
   }
   if (market.status === 1 && intervalClaimable(market)) {
     await claimIntervalMarket(market.id, "steps");
     return;
   }
+  if (market.status !== 0) {
+    setStatus(`The current ${LIVE_INTERVAL_LABEL} steps interval is no longer open`, "warning");
+    return;
+  }
+  setStatus("Opening wallet for steps interval position…");
   await takeIntervalPosition(
     market.id,
     state.stepsIntervalSelectedSide === "above",
     "steps-interval-trade-amount",
     "steps",
   );
+  });
 }
 
 function formatDuration(ms: number) {
@@ -3339,6 +5459,34 @@ function statusLabel(status: number) {
 
 function shortenAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+function formatSpectatorDisplayEmail(email: string) {
+  const syntheticMatch = email.match(/^([a-z]+)-([^@]+)@privy\.local$/i);
+  if (syntheticMatch) {
+    const provider = syntheticMatch[1];
+    const subject = syntheticMatch[2];
+    const providerLabel = provider === "twitter" ? "X" : `${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
+    const shortSubject = subject.length > 10 ? `${subject.slice(0, 6)}…${subject.slice(-2)}` : subject;
+    return `${providerLabel} · ${shortSubject}`;
+  }
+  if (email.length <= 28) {
+    return email;
+  }
+  const [name = "", domain = ""] = email.split("@");
+  const shortName = name.length > 14 ? `${name.slice(0, 11)}…` : name;
+  return domain ? `${shortName}@${domain}` : email;
+}
+
+function spectatorInitial(email: string) {
+  const trimmed = email.trim();
+  const syntheticMatch = trimmed.match(/^([a-z]+)-([^@]+)@privy\.local$/i);
+  const source = syntheticMatch?.[1] ?? trimmed;
+  return (source.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
+}
+
+function shortenHash(hash: string) {
+  return `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 }
 
 function addressesEqual(left: string | null, right: string) {

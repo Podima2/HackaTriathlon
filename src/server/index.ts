@@ -7,8 +7,8 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
-import { randomUUID } from "node:crypto";
-import { createPublicClient, createWalletClient, defineChain, encodeFunctionData, formatUnits, http, keccak256, parseGwei, parseUnits, stringToHex } from "viem";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createPublicClient, createWalletClient, defineChain, encodeFunctionData, formatUnits, getAddress, http, keccak256, parseGwei, parseUnits, stringToHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { WebSocketServer } from "ws";
 import type WebSocket from "ws";
@@ -20,6 +20,8 @@ const ARC_TESTNET_CHAIN_ID = 5042002;
 const ARC_TESTNET_RPC_URL = "https://rpc.testnet.arc.network";
 const ARC_TESTNET_EXPLORER_URL = "https://testnet.arcscan.app";
 const ARC_TESTNET_USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
+const LIVE_INTERVAL_MS = 4 * 60_000;
+const LIVE_INTERVAL_MINUTES = LIVE_INTERVAL_MS / 60_000;
 const COLLATERAL_DECIMALS = Number(process.env.COLLATERAL_DECIMALS ?? process.env.VITE_COLLATERAL_DECIMALS ?? 6);
 const COLLATERAL_SYMBOL = process.env.COLLATERAL_SYMBOL ?? process.env.VITE_COLLATERAL_SYMBOL ?? "USDC";
 
@@ -29,12 +31,17 @@ const cloudflareTurnKeyId = process.env.CLOUDFLARE_TURN_KEY_ID ?? "";
 const cloudflareTurnApiToken = process.env.CLOUDFLARE_TURN_API_TOKEN ?? "";
 const cloudflareTurnTtl = Number(process.env.CLOUDFLARE_TURN_TTL_SECONDS ?? 3600);
 const telemetryApiKey = process.env.TELEMETRY_API_KEY ?? "";
+const adminApiKey = process.env.ADMIN_API_KEY ?? "";
 const distDir = join(process.cwd(), "dist");
 const telemetryDir = join(process.cwd(), "data", "telemetry");
 const sessionsFilePath = join(telemetryDir, "sessions.json");
 const samplesFilePath = join(telemetryDir, "samples.json");
 const faucetDir = join(process.cwd(), "data", "faucet");
 const faucetClaimsFilePath = join(faucetDir, "claims.json");
+const spectatorDir = join(process.cwd(), "data", "spectators");
+const spectatorStoreFilePath = join(spectatorDir, "spectators.json");
+const tradeLedgerDir = join(process.cwd(), "data", "trades");
+const tradeLedgerFilePath = join(tradeLedgerDir, "trades.json");
 const swimFilePath = join(process.cwd(), "data", "swim.json");
 const marketRegistryFilePath = join(process.cwd(), "data", "market-registry.json");
 const intervalMarketRegistryFilePath = join(process.cwd(), "data", "interval-markets.json");
@@ -42,27 +49,30 @@ const supabaseUrl = (process.env.SUPABASE_URL ?? "").replace(/\/$/, "");
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const supabaseTelemetryEnabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
 const baseRpcUrl = process.env.BASE_RPC_URL || process.env.VITE_RPC_URL || ARC_TESTNET_RPC_URL;
+const normalizeAddressEnv = (value: string | undefined, fallback: string) =>
+  getAddress((value ?? fallback).trim());
 const collateralTokenAddress =
-  process.env.COLLATERAL_TOKEN ||
-  process.env.VITE_COLLATERAL_TOKEN ||
-  ARC_TESTNET_USDC_ADDRESS;
+  normalizeAddressEnv(process.env.COLLATERAL_TOKEN || process.env.VITE_COLLATERAL_TOKEN, ARC_TESTNET_USDC_ADDRESS);
 const predictionMarketAddress =
-  process.env.PREDICTION_MARKET ||
-  process.env.VITE_PREDICTION_MARKET ||
-  "0x86e8A602DB5A6c6cD9c5C5a753195F326BA4C1F3";
+  normalizeAddressEnv(
+    process.env.PREDICTION_MARKET || process.env.VITE_PREDICTION_MARKET,
+    "0x86e8A602DB5A6c6cD9c5C5a753195F326BA4C1F3",
+  );
 const parimutuelIntervalMarketAddress =
-  process.env.PARIMUTUEL_INTERVAL_MARKET ||
-  process.env.VITE_PARIMUTUEL_INTERVAL_MARKET ||
-  "";
+  (process.env.PARIMUTUEL_INTERVAL_MARKET || process.env.VITE_PARIMUTUEL_INTERVAL_MARKET || "").trim();
 const faucetPrivateKey = process.env.BASE_PRIVATE_KEY || "";
 const faucetClaimAmount = BigInt(process.env.FAUCET_CLAIM_AMOUNT || parseUnits("10", COLLATERAL_DECIMALS));
 const faucetCooldownMs = Number(process.env.FAUCET_COOLDOWN_MS || 3 * 60 * 60 * 1000);
+const TRADING_UNIT_DECIMALS = Math.max(0, COLLATERAL_DECIMALS - 3);
+const spectatorFundingAmount = BigInt(process.env.SPECTATOR_FUNDING_AMOUNT || parseUnits("1", COLLATERAL_DECIMALS));
 const serverFaucetEnabled = (process.env.ENABLE_SERVER_FAUCET ?? "").toLowerCase() === "true";
 const autoIntervalSeedAmount = BigInt(process.env.AUTO_INTERVAL_SEED_AMOUNT || parseUnits("1", COLLATERAL_DECIMALS));
 const intervalMaxFeePerGas = parseGwei(process.env.AUTO_INTERVAL_MAX_FEE_GWEI || "160");
 const intervalMaxPriorityFeePerGas = parseGwei(process.env.AUTO_INTERVAL_MAX_PRIORITY_FEE_GWEI || "1");
+const intervalAutomationGasLimit = BigInt(process.env.AUTO_INTERVAL_GAS_LIMIT || "300000");
 const enableIntervalAutomation = (process.env.ENABLE_INTERVAL_AUTOMATION ?? "true").toLowerCase() === "true";
-const intervalAutomationPollMs = Number(process.env.INTERVAL_AUTOMATION_POLL_MS ?? 15_000);
+const intervalAutomationPollMs = Number(process.env.INTERVAL_AUTOMATION_POLL_MS ?? 1_000);
+const marketEventsFromBlock = BigInt(process.env.MARKET_EVENTS_FROM_BLOCK || "0");
 const arcTestnetChain = defineChain({
   id: ARC_TESTNET_CHAIN_ID,
   name: "Arc Testnet",
@@ -131,7 +141,44 @@ const collateralTokenAbi = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
 ] as const;
+
+const thresholdPositionTakenEvent = {
+  type: "event",
+  name: "PositionTaken",
+  inputs: [
+    { name: "marketId", type: "uint256", indexed: true },
+    { name: "account", type: "address", indexed: true },
+    { name: "isYes", type: "bool", indexed: false },
+    { name: "collateralIn", type: "uint256", indexed: false },
+    { name: "sharesOut", type: "uint256", indexed: false },
+    { name: "yesPriceE18", type: "uint256", indexed: false },
+    { name: "noPriceE18", type: "uint256", indexed: false },
+  ],
+} as const;
+
+const intervalPositionTakenEvent = {
+  type: "event",
+  name: "IntervalPositionTaken",
+  inputs: [
+    { name: "marketId", type: "uint256", indexed: true },
+    { name: "account", type: "address", indexed: true },
+    { name: "isAbove", type: "bool", indexed: false },
+    { name: "collateralIn", type: "uint256", indexed: false },
+    { name: "totalAboveStake", type: "uint256", indexed: false },
+    { name: "totalBelowStake", type: "uint256", indexed: false },
+  ],
+} as const;
 const parimutuelIntervalMarketAbi = [
   {
     type: "function",
@@ -190,6 +237,24 @@ const parimutuelIntervalMarketAbi = [
       { name: "sampleElapsedMs", type: "uint64" },
     ],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "takePosition",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "marketId", type: "uint256" },
+      { name: "isAbove", type: "bool" },
+      { name: "collateralIn", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "claim",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "marketId", type: "uint256" }],
+    outputs: [{ name: "payoutAmount", type: "uint256" }],
   },
 ] as const;
 const predictionMarketAbi = [
@@ -280,6 +345,24 @@ const predictionMarketAbi = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "takePosition",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "marketId", type: "uint256" },
+      { name: "isYes", type: "bool" },
+      { name: "collateralIn", type: "uint256" },
+    ],
+    outputs: [{ name: "sharesOut", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "claim",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "marketId", type: "uint256" }],
+    outputs: [{ name: "payoutAmount", type: "uint256" }],
+  },
 ] as const;
 
 type TelemetrySessionDraft = {
@@ -360,6 +443,12 @@ type SupabaseTelemetrySampleRow = {
   elapsed_ms_since_session_start: number;
 };
 
+type SupabaseTelemetrySampleSummaryRow = {
+  session_id: string;
+  phone_observed_at: string;
+  elapsed_ms_since_session_start: number;
+};
+
 type SettlementMarketType = "exact" | "interval_avg" | "interval_max" | "interval_min" | "threshold" | "window_threshold" | "swim_threshold";
 
 type FaucetClaimRecord = {
@@ -370,6 +459,23 @@ type FaucetClaimRecord = {
 };
 
 type FaucetClaimsStore = Record<string, FaucetClaimRecord>;
+
+type SpectatorRecord = {
+  spectatorId: string;
+  email: string;
+  authToken: string;
+  walletAddress: string;
+  privateKey: string;
+  provider: "local";
+  createdAt: string;
+  lastActiveAt: string;
+  fundedAt: string | null;
+  fundedAmount: string | null;
+  fundingTxHash: string | null;
+  approvedAt: string | null;
+};
+
+type SpectatorStore = Record<string, SpectatorRecord>;
 
 type SwimEventRecord = {
   swimEventId: string;
@@ -403,6 +509,14 @@ type IntervalMarketRegistryRecord = {
   sessionId: string;
   metric: IntervalMetric;
   signalType: number;
+  contractAddress?: string;
+  createdTxHash?: string;
+  settledTxHash?: string;
+  settledAt?: string;
+  settledOutcomeAbove?: boolean;
+  settledObservedValue?: number;
+  settledSampleSeq?: number;
+  settledSampleElapsedMs?: number;
   referenceValue: number;
   windowStartElapsedMs: number;
   windowEndElapsedMs: number;
@@ -410,10 +524,37 @@ type IntervalMarketRegistryRecord = {
   createdAt: string;
 };
 type IntervalMarketRegistryStore = Record<string, IntervalMarketRegistryRecord>;
+type TradeLedgerRecord = {
+  id: string;
+  kind: "threshold" | "interval";
+  marketId: number;
+  metric: string;
+  sessionId: string | null;
+  side: "Yes" | "No" | "Above" | "Below";
+  amount: string;
+  amountFormatted: string;
+  account: string;
+  txHash: string;
+  blockNumber: string | null;
+  logIndex: number | null;
+  marketLabel: string;
+  source: "server";
+  createdAt: string;
+};
+type TradeLedgerStore = Record<string, TradeLedgerRecord>;
 type NonceCursor = { value: number };
+type TelemetrySessionSummary = TelemetrySessionRecord & {
+  sampleCount: number;
+  firstSampleAt: string | null;
+  lastSampleAt: string | null;
+  firstElapsedMs: number | null;
+  lastElapsedMs: number | null;
+};
 
 ensureTelemetryStorage();
 ensureFaucetStorage();
+ensureSpectatorStorage();
+ensureTradeLedgerStorage();
 ensureSwimStorage();
 ensureMarketRegistryStorage();
 ensureIntervalMarketRegistryStorage();
@@ -432,20 +573,21 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, service: "precannes-server" });
   }
 
-  if (req.method === "GET" && url.pathname === "/api/cre") {
-    return sendJson(res, 200, {
-      ok: true,
-      service: "precannes-cre-read-api",
-      routes: {
-        currentSession: "/api/cre/sessions/current",
-        latestSnapshot: "/api/cre/sessions/:sessionId/latest-snapshot?bucketMs=5000&staleAfterMs=10000",
-        currentLatestSnapshot: "/api/cre/sessions/current/latest-snapshot?bucketMs=5000&staleAfterMs=10000",
-        intervalClose: "/api/cre/sessions/:sessionId/interval-close?intervalStartMs=300000&intervalMs=300000&metric=hr",
-        currentIntervalClose: "/api/cre/sessions/current/interval-close?intervalStartMs=300000&intervalMs=300000&metric=hr",
-        thresholdSettlement: "/api/cre/markets/:marketId/threshold-settlement",
-      },
-    });
-  }
+  try {
+    if (req.method === "GET" && url.pathname === "/api/cre") {
+      return sendJson(res, 200, {
+        ok: true,
+        service: "precannes-cre-read-api",
+        routes: {
+          currentSession: "/api/cre/sessions/current",
+          latestSnapshot: "/api/cre/sessions/:sessionId/latest-snapshot?bucketMs=5000&staleAfterMs=10000",
+          currentLatestSnapshot: "/api/cre/sessions/current/latest-snapshot?bucketMs=5000&staleAfterMs=10000",
+          intervalClose: `/api/cre/sessions/:sessionId/interval-close?intervalStartMs=${LIVE_INTERVAL_MS}&intervalMs=${LIVE_INTERVAL_MS}&metric=hr`,
+          currentIntervalClose: `/api/cre/sessions/current/interval-close?intervalStartMs=${LIVE_INTERVAL_MS}&intervalMs=${LIVE_INTERVAL_MS}&metric=hr`,
+          thresholdSettlement: "/api/cre/markets/:marketId/threshold-settlement",
+        },
+      });
+    }
 
   if (req.method === "GET" && url.pathname === "/api/faucet") {
     const claims = loadFaucetClaims();
@@ -464,6 +606,250 @@ const server = createServer(async (req, res) => {
       ready: Boolean(serverFaucetEnabled && faucetPrivateKey && collateralTokenAddress),
       externalFaucetUrl: "https://faucet.circle.com/",
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/admin/trades") {
+    if (!isAuthorizedAdminRequest(req)) {
+      return sendJson(res, adminApiKey ? 401 : 503, {
+        error: adminApiKey ? "Unauthorized admin request" : "Admin API is not configured",
+      });
+    }
+    try {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 250), 1), 500);
+      const trades = await loadAdminTrades(limit);
+      return sendJson(res, 200, {
+        ok: true,
+        fromBlock: marketEventsFromBlock.toString(),
+        trades,
+      });
+    } catch (error) {
+      console.error("[admin] trade feed failed:", error);
+      const message = error instanceof Error ? error.message : "Unable to load trade feed";
+      return sendJson(res, 500, { error: message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/spectators/onboard") {
+    try {
+      const body = (await readJsonBody(req)) as { email?: string };
+      const email = normalizeEmail(body.email);
+      if (!email) {
+        return sendJson(res, 400, { error: "Expected a valid email address" });
+      }
+      const spectator = await ensureSpectatorProvisioned(email);
+      return sendJson(res, 200, spectatorResponsePayload(spectator));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to provision spectator wallet";
+      return sendJson(res, 500, { error: message });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/spectators/me") {
+    const spectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+    if (!spectator) {
+      return sendJson(res, 401, { error: "Spectator session not found" });
+    }
+    const store = loadSpectatorStore();
+    const current = store[spectator.email];
+    if (current) {
+      current.lastActiveAt = new Date().toISOString();
+      saveSpectatorStore(store);
+    }
+    return sendJson(res, 200, spectatorResponsePayload(current ?? spectator));
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/spectators/trades") {
+    const spectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+    if (!spectator) {
+      return sendJson(res, 401, { error: "Spectator session not found" });
+    }
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 100), 1), 250);
+    const spectatorAddress = getAddress(spectator.walletAddress);
+    const trades = (await loadAdminTrades(500))
+      .filter((trade) => getAddress(trade.account) === spectatorAddress)
+      .slice(0, limit);
+    return sendJson(res, 200, {
+      ok: true,
+      trades,
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/leaderboard") {
+    const requestingSpectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+    const store = loadSpectatorStore();
+    const spectators = Object.values(store);
+    const entries = await Promise.all(
+      spectators.map(async (s) => {
+        let points = 0n;
+        try {
+          points = await publicClient.readContract({
+            address: collateralTokenAddress as `0x${string}`,
+            abi: collateralTokenAbi,
+            functionName: "balanceOf",
+            args: [getAddress(s.walletAddress)],
+          }) as bigint;
+        } catch {
+          points = 0n;
+        }
+        return {
+          spectatorId: s.spectatorId,
+          animalName: animalNameFromId(s.spectatorId),
+          points,
+          isCurrentUser: requestingSpectator?.spectatorId === s.spectatorId,
+        };
+      }),
+    );
+    entries.sort((a, b) => (b.points > a.points ? 1 : b.points < a.points ? -1 : 0));
+    return sendJson(res, 200, {
+      ok: true,
+      entries: entries.map((e, i) => ({
+        rank: i + 1,
+        animalName: e.animalName,
+        points: formatUnits(e.points, TRADING_UNIT_DECIMALS),
+        isCurrentUser: e.isCurrentUser,
+      })),
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/spectators/trade/threshold") {
+    try {
+      const spectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+      if (!spectator) {
+        return sendJson(res, 401, { error: "Spectator session not found" });
+      }
+      const body = (await readJsonBody(req)) as {
+        marketId?: number;
+        isYes?: boolean;
+        amount?: number;
+      };
+      if (typeof body.marketId !== "number" || typeof body.isYes !== "boolean" || typeof body.amount !== "number" || body.amount <= 0) {
+        return sendJson(res, 400, { error: "Expected marketId, isYes, and a positive amount" });
+      }
+      const collateralIn = parseUnits(String(body.amount), TRADING_UNIT_DECIMALS);
+      const txHash = await executeSpectatorContract(spectator, {
+        address: predictionMarketAddress as `0x${string}`,
+        abi: predictionMarketAbi,
+        functionName: "takePosition",
+        args: [BigInt(Math.trunc(body.marketId)), body.isYes, collateralIn],
+      });
+      await recordSpectatorTrade({
+        kind: "threshold",
+        marketId: Math.trunc(body.marketId),
+        side: body.isYes ? "Yes" : "No",
+        amount: collateralIn,
+        account: spectator.walletAddress,
+        txHash,
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        txHash,
+        explorerUrl: `${ARC_TESTNET_EXPLORER_URL}/tx/${txHash}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to place threshold trade";
+      return sendJson(res, 500, { error: message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/spectators/trade/interval") {
+    try {
+      const spectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+      if (!spectator) {
+        return sendJson(res, 401, { error: "Spectator session not found" });
+      }
+      if (!parimutuelIntervalMarketAddress) {
+        return sendJson(res, 503, { error: "Interval market contract is not configured" });
+      }
+      const body = (await readJsonBody(req)) as {
+        marketId?: number;
+        isAbove?: boolean;
+        amount?: number;
+      };
+      if (typeof body.marketId !== "number" || typeof body.isAbove !== "boolean" || typeof body.amount !== "number" || body.amount <= 0) {
+        return sendJson(res, 400, { error: "Expected marketId, isAbove, and a positive amount" });
+      }
+      const collateralIn = parseUnits(String(body.amount), TRADING_UNIT_DECIMALS);
+      const txHash = await executeSpectatorContract(spectator, {
+        address: getAddress(parimutuelIntervalMarketAddress),
+        abi: parimutuelIntervalMarketAbi,
+        functionName: "takePosition",
+        args: [BigInt(Math.trunc(body.marketId)), body.isAbove, collateralIn],
+      });
+      await recordSpectatorTrade({
+        kind: "interval",
+        marketId: Math.trunc(body.marketId),
+        side: body.isAbove ? "Above" : "Below",
+        amount: collateralIn,
+        account: spectator.walletAddress,
+        txHash,
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        txHash,
+        explorerUrl: `${ARC_TESTNET_EXPLORER_URL}/tx/${txHash}`,
+      });
+    } catch (error) {
+      console.error("[spectator] interval trade failed:", error);
+      const message = error instanceof Error ? error.message : "Unable to place interval trade";
+      return sendJson(res, 500, { error: message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/spectators/claim/threshold") {
+    try {
+      const spectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+      if (!spectator) {
+        return sendJson(res, 401, { error: "Spectator session not found" });
+      }
+      const body = (await readJsonBody(req)) as { marketId?: number };
+      if (typeof body.marketId !== "number") {
+        return sendJson(res, 400, { error: "Expected marketId" });
+      }
+      const txHash = await executeSpectatorContract(spectator, {
+        address: predictionMarketAddress as `0x${string}`,
+        abi: predictionMarketAbi,
+        functionName: "claim",
+        args: [BigInt(Math.trunc(body.marketId))],
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        txHash,
+        explorerUrl: `${ARC_TESTNET_EXPLORER_URL}/tx/${txHash}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to claim threshold market";
+      return sendJson(res, 500, { error: message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/spectators/claim/interval") {
+    try {
+      const spectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+      if (!spectator) {
+        return sendJson(res, 401, { error: "Spectator session not found" });
+      }
+      if (!parimutuelIntervalMarketAddress) {
+        return sendJson(res, 503, { error: "Interval market contract is not configured" });
+      }
+      const body = (await readJsonBody(req)) as { marketId?: number };
+      if (typeof body.marketId !== "number") {
+        return sendJson(res, 400, { error: "Expected marketId" });
+      }
+      const txHash = await executeSpectatorContract(spectator, {
+        address: getAddress(parimutuelIntervalMarketAddress),
+        abi: parimutuelIntervalMarketAbi,
+        functionName: "claim",
+        args: [BigInt(Math.trunc(body.marketId))],
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        txHash,
+        explorerUrl: `${ARC_TESTNET_EXPLORER_URL}/tx/${txHash}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to claim interval market";
+      return sendJson(res, 500, { error: message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/swim") {
@@ -501,9 +887,18 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/interval-markets") {
+    if (enableIntervalAutomation && parimutuelIntervalMarketAddress && faucetPrivateKey) {
+      try {
+        await runIntervalAutomationTick();
+      } catch {
+        // Best-effort catch-up so the public registry reflects the current live session.
+      }
+    }
     const sessionId = url.searchParams.get("sessionId");
     const metric = url.searchParams.get("metric");
     const markets = Object.values(loadIntervalMarketRegistry())
+      .filter((record) => !parimutuelIntervalMarketAddress || record.contractAddress === parimutuelIntervalMarketAddress)
+      .filter((record) => (record.windowEndElapsedMs - record.windowStartElapsedMs) === LIVE_INTERVAL_MS)
       .filter((record) => !sessionId || record.sessionId === sessionId)
       .filter((record) => metric === "hr" || metric === "rr" || metric === "steps" ? record.metric === metric : true)
       .sort((left, right) => (
@@ -538,6 +933,14 @@ const server = createServer(async (req, res) => {
         sessionId: body.sessionId.trim(),
         metric: body.metric,
         signalType: body.signalType,
+        contractAddress: typeof body.contractAddress === "string" ? body.contractAddress : parimutuelIntervalMarketAddress || undefined,
+        createdTxHash: typeof body.createdTxHash === "string" ? body.createdTxHash : undefined,
+        settledTxHash: typeof body.settledTxHash === "string" ? body.settledTxHash : undefined,
+        settledAt: typeof body.settledAt === "string" ? body.settledAt : undefined,
+        settledOutcomeAbove: typeof body.settledOutcomeAbove === "boolean" ? body.settledOutcomeAbove : undefined,
+        settledObservedValue: typeof body.settledObservedValue === "number" ? body.settledObservedValue : undefined,
+        settledSampleSeq: typeof body.settledSampleSeq === "number" ? body.settledSampleSeq : undefined,
+        settledSampleElapsedMs: typeof body.settledSampleElapsedMs === "number" ? body.settledSampleElapsedMs : undefined,
         referenceValue: body.referenceValue,
         windowStartElapsedMs: body.windowStartElapsedMs,
         windowEndElapsedMs: body.windowEndElapsedMs,
@@ -569,7 +972,7 @@ const server = createServer(async (req, res) => {
         "Prediction market contract is not configured on the backend",
         "Backend wallet is not configured for automatic interval markets",
         "Session not found",
-        "Current 5-minute interval is not available yet",
+        `Current ${LIVE_INTERVAL_MINUTES}-minute interval is not available yet`,
       ];
       if (expected.includes(message)) {
         return sendJson(res, 200, { ok: false, created: false, reason: message });
@@ -729,8 +1132,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/telemetry/sessions" && req.method === "GET") {
-    const store = await loadTelemetryStoreAsync();
-    const sessions = summarizeSessions(store)
+    const sessions = (await loadTelemetrySessionSummariesAsync())
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
     return sendJson(res, 200, { sessions });
@@ -757,25 +1159,24 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/cre/sessions/current") {
-    const store = await loadTelemetryStoreAsync();
-    const session = selectCurrentLiveSession(store);
-    if (!session) {
+    const current = await loadCurrentLiveSessionDataAsync();
+    if (!current) {
       return sendJson(res, 404, { error: "No active sampled session found" });
     }
 
     return sendJson(res, 200, {
       ok: true,
-      sessionId: session.sessionId,
-      sessionIdHash: hashSessionId(session.sessionId),
-      createdAt: session.createdAt,
-      clientStartedAt: session.clientStartedAt,
-      eventTimezone: session.eventTimezone,
-      eventUtcOffsetSeconds: session.eventUtcOffsetSeconds,
-      status: session.status,
-      notes: session.notes,
-      sampleCount: session.sampleCount,
-      lastSampleAt: session.lastSampleAt,
-      lastElapsedMs: session.lastElapsedMs,
+      sessionId: current.session.sessionId,
+      sessionIdHash: hashSessionId(current.session.sessionId),
+      createdAt: current.session.createdAt,
+      clientStartedAt: current.session.clientStartedAt,
+      eventTimezone: current.session.eventTimezone,
+      eventUtcOffsetSeconds: current.session.eventUtcOffsetSeconds,
+      status: current.session.status,
+      notes: current.session.notes,
+      sampleCount: current.samples.length,
+      lastSampleAt: current.samples.at(-1)?.phoneObservedAt ?? null,
+      lastElapsedMs: current.samples.at(-1)?.elapsedMsSinceSessionStart ?? null,
     });
   }
 
@@ -787,20 +1188,18 @@ const server = createServer(async (req, res) => {
     !url.pathname.endsWith("/interval-close") &&
     !url.pathname.endsWith("/interval-window")
   ) {
-    const resolvedSessionId = creSessionMatch === "current"
-      ? selectCurrentLiveSession(await loadTelemetryStoreAsync())?.sessionId ?? null
-      : creSessionMatch;
+    const current = creSessionMatch === "current" ? await loadCurrentLiveSessionDataAsync() : null;
+    const resolvedSessionId = current?.session.sessionId ?? (creSessionMatch === "current" ? null : creSessionMatch);
     if (!resolvedSessionId) {
       return sendJson(res, 404, { error: "No active sampled session found" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[resolvedSessionId];
+    const session = current?.session ?? (await loadTelemetryStoreAsync()).sessions[resolvedSessionId];
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
 
-    const samples = getSortedSamples(store, resolvedSessionId);
+    const samples = current?.samples ?? await loadTelemetrySamplesForSessionAsync(resolvedSessionId);
     const latestSample = samples.at(-1) ?? null;
 
     return sendJson(res, 200, {
@@ -820,9 +1219,8 @@ const server = createServer(async (req, res) => {
 
   const creLatestSnapshotMatch = matchPath(url.pathname, "/api/cre/sessions/", "/latest-snapshot");
   if (creLatestSnapshotMatch && req.method === "GET") {
-    const resolvedSessionId = creLatestSnapshotMatch === "current"
-      ? selectCurrentLiveSession(await loadTelemetryStoreAsync())?.sessionId ?? null
-      : creLatestSnapshotMatch;
+    const current = creLatestSnapshotMatch === "current" ? await loadCurrentLiveSessionDataAsync() : null;
+    const resolvedSessionId = current?.session.sessionId ?? (creLatestSnapshotMatch === "current" ? null : creLatestSnapshotMatch);
     if (!resolvedSessionId) {
       return sendJson(res, 404, { error: "No active sampled session found" });
     }
@@ -836,13 +1234,12 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 400, { error: "Expected non-negative numeric staleAfterMs" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[resolvedSessionId];
+    const session = current?.session ?? (await loadTelemetryStoreAsync()).sessions[resolvedSessionId];
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
 
-    const samples = getSortedSamples(store, resolvedSessionId);
+    const samples = current?.samples ?? await loadTelemetrySamplesForSessionAsync(resolvedSessionId);
     if (samples.length === 0) {
       return sendJson(res, 422, { error: "No samples available for session" });
     }
@@ -875,15 +1272,14 @@ const server = createServer(async (req, res) => {
 
   const creIntervalCloseMatch = matchPath(url.pathname, "/api/cre/sessions/", "/interval-close");
   if (creIntervalCloseMatch && req.method === "GET") {
-    const resolvedSessionId = creIntervalCloseMatch === "current"
-      ? selectCurrentLiveSession(await loadTelemetryStoreAsync())?.sessionId ?? null
-      : creIntervalCloseMatch;
+    const current = creIntervalCloseMatch === "current" ? await loadCurrentLiveSessionDataAsync() : null;
+    const resolvedSessionId = current?.session.sessionId ?? (creIntervalCloseMatch === "current" ? null : creIntervalCloseMatch);
     if (!resolvedSessionId) {
       return sendJson(res, 404, { error: "No active sampled session found" });
     }
 
     const intervalStartMs = Number(url.searchParams.get("intervalStartMs"));
-    const intervalMs = Number(url.searchParams.get("intervalMs") ?? 300_000);
+    const intervalMs = Number(url.searchParams.get("intervalMs") ?? LIVE_INTERVAL_MS);
     const metric = url.searchParams.get("metric") === "rr"
       ? "rr"
       : url.searchParams.get("metric") === "steps"
@@ -896,13 +1292,12 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 400, { error: "Expected positive numeric intervalMs" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[resolvedSessionId];
+    const session = current?.session ?? (await loadTelemetryStoreAsync()).sessions[resolvedSessionId];
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
 
-    const samples = getSortedSamples(store, resolvedSessionId);
+    const samples = current?.samples ?? await loadTelemetrySamplesForSessionAsync(resolvedSessionId);
     if (samples.length === 0) {
       return sendJson(res, 422, { error: "No samples available for session" });
     }
@@ -967,15 +1362,14 @@ const server = createServer(async (req, res) => {
 
   const creIntervalWindowMatch = matchPath(url.pathname, "/api/cre/sessions/", "/interval-window");
   if (creIntervalWindowMatch && req.method === "GET") {
-    const resolvedSessionId = creIntervalWindowMatch === "current"
-      ? selectCurrentLiveSession(await loadTelemetryStoreAsync())?.sessionId ?? null
-      : creIntervalWindowMatch;
+    const current = creIntervalWindowMatch === "current" ? await loadCurrentLiveSessionDataAsync() : null;
+    const resolvedSessionId = current?.session.sessionId ?? (creIntervalWindowMatch === "current" ? null : creIntervalWindowMatch);
     if (!resolvedSessionId) {
       return sendJson(res, 404, { error: "No active sampled session found" });
     }
 
     const intervalStartMs = Number(url.searchParams.get("intervalStartMs"));
-    const intervalMs = Number(url.searchParams.get("intervalMs") ?? 300_000);
+    const intervalMs = Number(url.searchParams.get("intervalMs") ?? LIVE_INTERVAL_MS);
     const metric = url.searchParams.get("metric") === "rr"
       ? "rr"
       : url.searchParams.get("metric") === "steps"
@@ -988,13 +1382,12 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 400, { error: "Expected positive numeric intervalMs" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[resolvedSessionId];
+    const session = current?.session ?? (await loadTelemetryStoreAsync()).sessions[resolvedSessionId];
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
 
-    const samples = getSortedSamples(store, resolvedSessionId);
+    const samples = current?.samples ?? await loadTelemetrySamplesForSessionAsync(resolvedSessionId);
     if (samples.length === 0) {
       return sendJson(res, 422, { error: "No samples available for session" });
     }
@@ -1111,7 +1504,7 @@ const server = createServer(async (req, res) => {
     if (signalType === 3 && (meta?.type === "steps_threshold_window" || meta?.type === "steps_interval_direction")) {
       const windowStartElapsedMs = typeof meta.windowStartElapsedMs === "number"
         ? meta.windowStartElapsedMs
-        : Math.max(0, Number(t) - ((meta?.intervalMinutes ?? 5) * 60_000));
+        : Math.max(0, Number(t) - ((meta?.intervalMinutes ?? LIVE_INTERVAL_MINUTES) * 60_000));
       const windowEndElapsedMs = typeof meta.windowEndElapsedMs === "number"
         ? meta.windowEndElapsedMs
         : Number(t);
@@ -1464,7 +1857,6 @@ const server = createServer(async (req, res) => {
       if (!sessionId) {
         return sendJson(res, 400, { error: "Expected sessionId" });
       }
-      const store = await loadTelemetryStoreAsync();
       const payloadSamples = Array.isArray(body.samples) ? body.samples : [];
       if (payloadSamples.length === 0) {
         return sendJson(res, 400, { error: "No telemetry samples provided" });
@@ -1474,7 +1866,8 @@ const server = createServer(async (req, res) => {
         .map((sample) => normalizeSamplePayload(sample))
         .sort((a, b) => a.sampleSeq - b.sampleSeq);
 
-      await ensureTelemetrySessionExists(sessionId, normalizedSamples, store.sessions[sessionId]);
+      const session = await loadTelemetrySessionAsync(sessionId);
+      await ensureTelemetrySessionExists(sessionId, normalizedSamples, session ?? undefined);
 
       const serverReceivedAt = new Date().toISOString();
       await upsertTelemetrySamples(sessionId, normalizedSamples.map((sample) => ({
@@ -1502,7 +1895,6 @@ const server = createServer(async (req, res) => {
     try {
       const body = (await readJsonBody(req)) as { samples?: TelemetrySamplePayload[] };
       const sessionId = sampleMatch;
-      const store = await loadTelemetryStoreAsync();
 
       const payloadSamples = Array.isArray(body.samples) ? body.samples : [];
       if (payloadSamples.length === 0) {
@@ -1513,7 +1905,8 @@ const server = createServer(async (req, res) => {
         .map((sample) => normalizeSamplePayload(sample))
         .sort((a, b) => a.sampleSeq - b.sampleSeq);
 
-      await ensureTelemetrySessionExists(sessionId, normalizedSamples, store.sessions[sessionId]);
+      const session = await loadTelemetrySessionAsync(sessionId);
+      await ensureTelemetrySessionExists(sessionId, normalizedSamples, session ?? undefined);
 
       const serverReceivedAt = new Date().toISOString();
       await upsertTelemetrySamples(sessionId, normalizedSamples.map((sample) => ({
@@ -1538,8 +1931,7 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 401, { error: "Unauthorized telemetry request" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[finalizeMatch];
+    const session = await loadTelemetrySessionAsync(finalizeMatch);
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
@@ -1554,8 +1946,7 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 401, { error: "Unauthorized telemetry request" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[abandonMatch];
+    const session = await loadTelemetrySessionAsync(abandonMatch);
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
@@ -1570,13 +1961,12 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 401, { error: "Unauthorized telemetry request" });
     }
 
-    const store = await loadTelemetryStoreAsync();
-    const session = store.sessions[statusMatch];
+    const session = await loadTelemetrySessionAsync(statusMatch);
     if (!session) {
       return sendJson(res, 404, { error: "Session not found" });
     }
 
-    const samples = store.samples[statusMatch] ?? [];
+    const samples = await loadTelemetrySamplesForSessionAsync(statusMatch);
     return sendJson(res, 200, {
       latestAckedSeq: samples.length ? samples[samples.length - 1]?.sampleSeq : null,
       pendingCount: 0,
@@ -1642,11 +2032,30 @@ const server = createServer(async (req, res) => {
     });
   }
 
-  if (req.method === "GET") {
-    return serveStaticAsset(url.pathname, res);
-  }
+    if (req.method === "GET") {
+      return serveStaticAsset(url.pathname, res);
+    }
 
-  sendJson(res, 404, { error: "Not found" });
+    sendJson(res, 404, { error: "Not found" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unhandled server error";
+    console.error("request failed", {
+      method: req.method,
+      path: url.pathname,
+      error: message,
+    });
+
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+
+    if (message.startsWith("Supabase request failed (502)")) {
+      return sendJson(res, 503, { error: "Telemetry backend temporarily unavailable" });
+    }
+
+    return sendJson(res, 500, { error: "Internal server error" });
+  }
 });
 
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -1709,6 +2118,7 @@ wss.on("connection", (socket) => {
 
 server.listen(port, () => {
   console.log(`PreCannes signaling server listening on http://localhost:${port}`);
+  void hydrateSpectatorsFromSupabase();
   startIntervalAutomation();
 });
 
@@ -1807,7 +2217,7 @@ function sendJson(
 function applyCorsHeaders(res: import("node:http").ServerResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-API-Key");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,X-API-Key,X-Admin-Token,X-Spectator-Token");
 }
 
 function serveStaticAsset(pathname: string, res: import("node:http").ServerResponse) {
@@ -1902,6 +2312,20 @@ function ensureFaucetStorage() {
   }
 }
 
+function ensureSpectatorStorage() {
+  mkdirSync(spectatorDir, { recursive: true });
+  if (!existsSync(spectatorStoreFilePath)) {
+    writeFileSync(spectatorStoreFilePath, JSON.stringify({}, null, 2));
+  }
+}
+
+function ensureTradeLedgerStorage() {
+  mkdirSync(tradeLedgerDir, { recursive: true });
+  if (!existsSync(tradeLedgerFilePath)) {
+    writeFileSync(tradeLedgerFilePath, JSON.stringify({}, null, 2));
+  }
+}
+
 function ensureSwimStorage() {
   if (!existsSync(swimFilePath)) {
     writeFileSync(swimFilePath, JSON.stringify({
@@ -1936,6 +2360,195 @@ function loadTelemetryStore(): TelemetryStore {
 function saveTelemetryStore(store: TelemetryStore) {
   writeFileSync(sessionsFilePath, JSON.stringify(store.sessions, null, 2));
   writeFileSync(samplesFilePath, JSON.stringify(store.samples, null, 2));
+}
+
+function loadSpectatorStore(): SpectatorStore {
+  ensureSpectatorStorage();
+  return JSON.parse(readFileSync(spectatorStoreFilePath, "utf8")) as SpectatorStore;
+}
+
+function saveSpectatorStore(store: SpectatorStore) {
+  writeFileSync(spectatorStoreFilePath, JSON.stringify(store, null, 2));
+}
+
+function loadTradeLedger(): TradeLedgerStore {
+  ensureTradeLedgerStorage();
+  return JSON.parse(readFileSync(tradeLedgerFilePath, "utf8")) as TradeLedgerStore;
+}
+
+function saveTradeLedger(store: TradeLedgerStore) {
+  writeFileSync(tradeLedgerFilePath, JSON.stringify(store, null, 2));
+}
+
+type SupabaseSpectatorRow = {
+  email: string;
+  spectator_id: string;
+  auth_token: string;
+  wallet_address: string;
+  private_key: string;
+  provider: string;
+  created_at: string;
+  last_active_at: string;
+  funded_at: string | null;
+  funded_amount: string | null;
+  funding_tx_hash: string | null;
+  approved_at: string | null;
+};
+
+type SupabaseTradeLedgerRow = {
+  id: string;
+  kind: string;
+  market_id: number;
+  metric: string;
+  session_id: string | null;
+  side: string;
+  amount: string;
+  amount_formatted: string;
+  account: string;
+  tx_hash: string;
+  block_number: string | null;
+  log_index: number | null;
+  market_label: string;
+  source: string;
+  created_at: string;
+};
+
+function rowToSpectatorRecord(row: SupabaseSpectatorRow): SpectatorRecord {
+  return {
+    spectatorId: row.spectator_id,
+    email: row.email,
+    authToken: row.auth_token,
+    walletAddress: row.wallet_address,
+    privateKey: row.private_key,
+    provider: "local",
+    createdAt: row.created_at,
+    lastActiveAt: row.last_active_at,
+    fundedAt: row.funded_at,
+    fundedAmount: row.funded_amount,
+    fundingTxHash: row.funding_tx_hash,
+    approvedAt: row.approved_at,
+  };
+}
+
+function spectatorRecordToRow(record: SpectatorRecord): SupabaseSpectatorRow {
+  return {
+    email: record.email,
+    spectator_id: record.spectatorId,
+    auth_token: record.authToken,
+    wallet_address: record.walletAddress,
+    private_key: record.privateKey,
+    provider: record.provider,
+    created_at: record.createdAt,
+    last_active_at: record.lastActiveAt,
+    funded_at: record.fundedAt,
+    funded_amount: record.fundedAmount,
+    funding_tx_hash: record.fundingTxHash,
+    approved_at: record.approvedAt,
+  };
+}
+
+function tradeRecordToRow(record: TradeLedgerRecord): SupabaseTradeLedgerRow {
+  return {
+    id: record.id,
+    kind: record.kind,
+    market_id: record.marketId,
+    metric: record.metric,
+    session_id: record.sessionId,
+    side: record.side,
+    amount: record.amount,
+    amount_formatted: record.amountFormatted,
+    account: record.account,
+    tx_hash: record.txHash,
+    block_number: record.blockNumber,
+    log_index: record.logIndex,
+    market_label: record.marketLabel,
+    source: record.source,
+    created_at: record.createdAt,
+  };
+}
+
+function rowToTradeRecord(row: SupabaseTradeLedgerRow): TradeLedgerRecord {
+  return {
+    id: row.id,
+    kind: row.kind === "threshold" ? "threshold" : "interval",
+    marketId: row.market_id,
+    metric: row.metric,
+    sessionId: row.session_id,
+    side: row.side === "Yes" || row.side === "No" || row.side === "Above" || row.side === "Below" ? row.side : "Above",
+    amount: row.amount,
+    amountFormatted: row.amount_formatted,
+    account: row.account,
+    txHash: row.tx_hash,
+    blockNumber: row.block_number,
+    logIndex: row.log_index,
+    marketLabel: row.market_label,
+    source: "server",
+    createdAt: row.created_at,
+  };
+}
+
+async function hydrateSpectatorsFromSupabase() {
+  if (!supabaseTelemetryEnabled) {
+    return;
+  }
+  try {
+    const rows = await supabaseRequestAll<SupabaseSpectatorRow>("app_spectators?select=*");
+    if (rows.length === 0) {
+      return;
+    }
+    const local = loadSpectatorStore();
+    for (const row of rows) {
+      local[row.email] = rowToSpectatorRecord(row);
+    }
+    saveSpectatorStore(local);
+    console.log(`[spectator] hydrated ${rows.length} spectator(s) from Supabase`);
+  } catch (error) {
+    console.error("[spectator] hydrate failed:", error);
+  }
+}
+
+async function persistSpectatorToSupabase(record: SpectatorRecord) {
+  if (!supabaseTelemetryEnabled) {
+    return;
+  }
+  await supabaseRequest("app_spectators", {
+    method: "POST",
+    headers: {
+      Prefer: "resolution=merge-duplicates,return=minimal",
+    },
+    body: JSON.stringify(spectatorRecordToRow(record)),
+  });
+}
+
+async function loadTradeLedgerFromSupabase() {
+  if (!supabaseTelemetryEnabled) {
+    return [];
+  }
+  try {
+    const rows = await supabaseRequest<SupabaseTradeLedgerRow[]>(
+      "app_trade_ledger?select=*&order=created_at.desc&limit=1000",
+      { method: "GET" },
+    );
+    return rows.map(rowToTradeRecord);
+  } catch (error) {
+    console.error("[trade-ledger] supabase load failed:", error);
+    return [];
+  }
+}
+
+function persistTradeToSupabase(record: TradeLedgerRecord) {
+  if (!supabaseTelemetryEnabled) {
+    return;
+  }
+  void supabaseRequest("app_trade_ledger", {
+    method: "POST",
+    headers: {
+      Prefer: "resolution=merge-duplicates,return=minimal",
+    },
+    body: JSON.stringify(tradeRecordToRow(record)),
+  }).catch((error: unknown) => {
+    console.error("[trade-ledger] supabase persist failed:", error);
+  });
 }
 
 async function supabaseRequest<T>(
@@ -2046,6 +2659,189 @@ async function loadTelemetryStoreAsync(): Promise<TelemetryStore> {
     samples[sample.sessionId].push(sample);
   }
   return { sessions, samples };
+}
+
+async function mapConcurrent<T, R>(
+  items: T[],
+  mapper: (item: T) => Promise<R>,
+  concurrency = 8,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await mapper(items[index]!);
+    }
+  }));
+
+  return results;
+}
+
+async function loadTelemetrySessionSummariesAsync(limit = 50): Promise<TelemetrySessionSummary[]> {
+  if (!supabaseTelemetryEnabled) {
+    return summarizeSessions(loadTelemetryStore());
+  }
+
+  const sessionRows = await supabaseRequest<SupabaseTelemetrySessionRow[]>(
+    `telemetry_sessions?select=*&order=created_at.desc&limit=${limit}`,
+  );
+  const sessions = sessionRows.map(mapSupabaseSession);
+  if (sessions.length === 0) {
+    return [];
+  }
+
+  const latestSamples = await mapConcurrent(sessions, async (session) => {
+    const rows = await supabaseRequest<SupabaseTelemetrySampleSummaryRow[]>(
+      `telemetry_samples?session_id=eq.${encodeURIComponent(session.sessionId)}&select=session_id,phone_observed_at,elapsed_ms_since_session_start&order=sample_seq.desc&limit=1`,
+    );
+    return {
+      sessionId: session.sessionId,
+      latest: rows[0]
+        ? {
+            phoneObservedAt: rows[0].phone_observed_at,
+            elapsedMsSinceSessionStart: rows[0].elapsed_ms_since_session_start,
+          }
+        : null,
+    };
+  });
+
+  const latestBySession = new Map(latestSamples.map((entry) => [entry.sessionId, entry.latest]));
+  return sessions.map((session) => {
+    const latest = latestBySession.get(session.sessionId) ?? null;
+    return {
+      ...session,
+      sampleCount: latest ? 1 : 0,
+      firstSampleAt: latest?.phoneObservedAt ?? null,
+      lastSampleAt: latest?.phoneObservedAt ?? null,
+      firstElapsedMs: latest?.elapsedMsSinceSessionStart ?? null,
+      lastElapsedMs: latest?.elapsedMsSinceSessionStart ?? null,
+    } satisfies TelemetrySessionSummary;
+  });
+}
+
+async function loadTelemetrySamplesForSessionAsync(sessionId: string): Promise<TelemetrySampleRecord[]> {
+  if (!supabaseTelemetryEnabled) {
+    const store = loadTelemetryStore();
+    return getSortedSamples(store, sessionId);
+  }
+
+  const rows = await supabaseRequestAll<SupabaseTelemetrySampleRow>(
+    `telemetry_samples?session_id=eq.${encodeURIComponent(sessionId)}&select=*&order=sample_seq.asc`,
+  );
+  return rows.map(mapSupabaseSample);
+}
+
+async function loadTelemetrySessionAsync(sessionId: string): Promise<TelemetrySessionRecord | null> {
+  if (!supabaseTelemetryEnabled) {
+    const store = loadTelemetryStore();
+    return store.sessions[sessionId] ?? null;
+  }
+
+  const rows = await supabaseRequest<SupabaseTelemetrySessionRow[]>(
+    `telemetry_sessions?session_id=eq.${encodeURIComponent(sessionId)}&select=*`,
+  );
+  return rows[0] ? mapSupabaseSession(rows[0]) : null;
+}
+
+async function loadCurrentLiveSessionDataAsync(): Promise<{
+  session: TelemetrySessionRecord;
+  samples: TelemetrySampleRecord[];
+  summary: TelemetrySessionSummary;
+} | null> {
+  if (!supabaseTelemetryEnabled) {
+    const store = loadTelemetryStore();
+    const summary = selectCurrentLiveSession(store);
+    if (!summary) {
+      return null;
+    }
+    const session = store.sessions[summary.sessionId];
+    if (!session) {
+      return null;
+    }
+    const samples = getSortedSamples(store, summary.sessionId);
+    if (samples.length === 0) {
+      return null;
+    }
+    return { session, samples, summary };
+  }
+
+  const sessions = await supabaseRequest<SupabaseTelemetrySessionRow[]>(
+    "telemetry_sessions?select=*&status=eq.active&order=created_at.desc&limit=25",
+  );
+  const activeSessions = sessions
+    .map(mapSupabaseSession)
+    .filter((session) => session.notes !== "Auto-recovered from sample upload");
+  if (activeSessions.length === 0) {
+    return null;
+  }
+
+  const activeSessionIds = new Set(activeSessions.map((session) => session.sessionId));
+  const latestRows = await supabaseRequest<SupabaseTelemetrySampleRow[]>(
+    "telemetry_samples?select=*&order=phone_observed_at.desc&limit=500",
+  );
+  const latestBySession = new Map<string, TelemetrySampleRecord>();
+  for (const row of latestRows) {
+    if (!activeSessionIds.has(row.session_id) || latestBySession.has(row.session_id)) {
+      continue;
+    }
+    latestBySession.set(row.session_id, mapSupabaseSample(row));
+  }
+  if (latestBySession.size === 0) {
+    return null;
+  }
+
+  const summaryCandidates: TelemetrySessionSummary[] = activeSessions
+    .flatMap((session) => {
+      const latestSample = latestBySession.get(session.sessionId);
+      if (!latestSample) {
+        return [];
+      }
+      return [{
+        ...session,
+        sampleCount: 1,
+        firstSampleAt: latestSample.phoneObservedAt,
+        lastSampleAt: latestSample.phoneObservedAt,
+        firstElapsedMs: latestSample.elapsedMsSinceSessionStart,
+        lastElapsedMs: latestSample.elapsedMsSinceSessionStart,
+      } satisfies TelemetrySessionSummary];
+    })
+    .sort((left, right) => {
+      const leftSampleTime = Date.parse(left.lastSampleAt ?? left.createdAt);
+      const rightSampleTime = Date.parse(right.lastSampleAt ?? right.createdAt);
+      if (leftSampleTime !== rightSampleTime) {
+        return rightSampleTime - leftSampleTime;
+      }
+      return right.createdAt.localeCompare(left.createdAt);
+    });
+  const summary = summaryCandidates[0];
+  if (!summary) {
+    return null;
+  }
+
+  const session = activeSessions.find((candidate) => candidate.sessionId === summary.sessionId);
+  if (!session) {
+    return null;
+  }
+  const samples = await loadTelemetrySamplesForSessionAsync(summary.sessionId);
+  if (samples.length === 0) {
+    return null;
+  }
+
+  return {
+    session,
+    samples,
+    summary: {
+      ...summary,
+      sampleCount: samples.length,
+      firstSampleAt: samples[0]?.phoneObservedAt ?? summary.firstSampleAt,
+      lastSampleAt: samples[samples.length - 1]?.phoneObservedAt ?? summary.lastSampleAt,
+      firstElapsedMs: samples[0]?.elapsedMsSinceSessionStart ?? summary.firstElapsedMs,
+      lastElapsedMs: samples[samples.length - 1]?.elapsedMsSinceSessionStart ?? summary.lastElapsedMs,
+    },
+  };
 }
 
 async function createTelemetrySession(session: TelemetrySessionRecord) {
@@ -2222,7 +3018,7 @@ function saveIntervalMarketRegistry(store: IntervalMarketRegistryStore) {
   writeFileSync(intervalMarketRegistryFilePath, JSON.stringify(store, null, 2));
 }
 
-function summarizeSessions(store: TelemetryStore) {
+function summarizeSessions(store: TelemetryStore): TelemetrySessionSummary[] {
   return Object.values(store.sessions).map((session) => {
     const samples = store.samples[session.sessionId] ?? [];
     return {
@@ -2311,6 +3107,445 @@ function normalizeAddress(value: unknown) {
   }
   const trimmed = value.trim();
   return /^0x[a-fA-F0-9]{40}$/.test(trimmed) ? trimmed : null;
+}
+
+function isAuthorizedAdminRequest(req: import("node:http").IncomingMessage) {
+  if (!adminApiKey) {
+    return false;
+  }
+  const tokenHeader = req.headers["x-admin-token"];
+  const token = typeof tokenHeader === "string" ? tokenHeader.trim() : "";
+  if (!token) {
+    return false;
+  }
+  const expected = Buffer.from(adminApiKey);
+  const received = Buffer.from(token);
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
+async function recordSpectatorTrade(input: {
+  kind: "threshold" | "interval";
+  marketId: number;
+  side: "Yes" | "No" | "Above" | "Below";
+  amount: bigint;
+  account: string;
+  txHash: `0x${string}`;
+}) {
+  const receipt = await publicClient.getTransactionReceipt({ hash: input.txHash }).catch(() => null);
+  const thresholdRegistry = input.kind === "threshold"
+    ? Object.values(loadMarketRegistry()).find((record) => record.marketId === input.marketId) ?? null
+    : null;
+  const intervalRegistry = input.kind === "interval"
+    ? Object.values(loadIntervalMarketRegistry()).find((record) => record.marketId === input.marketId) ?? null
+    : null;
+  const record: TradeLedgerRecord = {
+    id: `${input.txHash}:${input.marketId}:${input.account.toLowerCase()}:${input.side}`,
+    kind: input.kind,
+    marketId: input.marketId,
+    metric: input.kind === "interval"
+      ? intervalRegistry?.metric?.toUpperCase() ?? "Interval"
+      : signalMetricLabel(thresholdRegistry?.signalType ?? null),
+    sessionId: input.kind === "interval"
+      ? intervalRegistry?.sessionId ?? null
+      : thresholdRegistry?.referenceId ?? null,
+    side: input.side,
+    amount: input.amount.toString(),
+    amountFormatted: formatTradeAmount(input.amount),
+    account: getAddress(input.account),
+    txHash: input.txHash,
+    blockNumber: receipt?.blockNumber?.toString() ?? null,
+    logIndex: null,
+    marketLabel: input.kind === "interval"
+      ? intervalRegistry
+        ? `${intervalRegistry.metric.toUpperCase()} ${formatElapsedWindow(intervalRegistry.windowStartElapsedMs, intervalRegistry.windowEndElapsedMs)}`
+        : `Interval market #${input.marketId}`
+      : thresholdRegistry
+        ? `${thresholdRegistry.type.replace(/_/g, " ")} #${input.marketId}`
+        : `Threshold market #${input.marketId}`,
+    source: "server",
+    createdAt: new Date().toISOString(),
+  };
+  const store = loadTradeLedger();
+  store[record.id] = record;
+  saveTradeLedger(store);
+  persistTradeToSupabase(record);
+}
+
+async function loadAdminTrades(limit: number) {
+  const thresholdRegistry = Object.values(loadMarketRegistry());
+  const intervalRegistry = Object.values(loadIntervalMarketRegistry());
+
+  const [thresholdLogs, intervalLogs] = await Promise.all([
+    predictionMarketAddress
+      ? publicClient.getLogs({
+          address: predictionMarketAddress as `0x${string}`,
+          event: thresholdPositionTakenEvent,
+          fromBlock: marketEventsFromBlock,
+          toBlock: "latest",
+        }).catch((error: unknown) => {
+          console.error("[admin] threshold trade logs failed:", error);
+          return [];
+        })
+      : Promise.resolve([]),
+    parimutuelIntervalMarketAddress
+      ? publicClient.getLogs({
+          address: getAddress(parimutuelIntervalMarketAddress),
+          event: intervalPositionTakenEvent,
+          fromBlock: marketEventsFromBlock,
+          toBlock: "latest",
+        }).catch((error: unknown) => {
+          console.error("[admin] interval trade logs failed:", error);
+          return [];
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const thresholdTrades = thresholdLogs.map((log) => {
+    const marketId = Number(log.args.marketId ?? 0n);
+    const account = getAddress(log.args.account ?? "0x0000000000000000000000000000000000000000");
+    const registry = thresholdRegistry.find((record) => record.marketId === marketId) ?? null;
+    return {
+      kind: "threshold" as const,
+      marketId,
+      metric: signalMetricLabel(registry?.signalType ?? null),
+      sessionId: registry?.referenceId ?? null,
+      side: log.args.isYes ? "Yes" : "No",
+      amount: (log.args.collateralIn ?? 0n).toString(),
+      amountFormatted: formatTradeAmount(log.args.collateralIn ?? 0n),
+      account,
+      txHash: log.transactionHash,
+      blockNumber: log.blockNumber.toString(),
+      logIndex: Number(log.logIndex ?? 0),
+      marketLabel: registry
+        ? `${registry.type.replace(/_/g, " ")} #${marketId}`
+        : `Threshold market #${marketId}`,
+    };
+  });
+
+  const intervalTrades = intervalLogs.map((log) => {
+    const marketId = Number(log.args.marketId ?? 0n);
+    const account = getAddress(log.args.account ?? "0x0000000000000000000000000000000000000000");
+    const registry = intervalRegistry.find((record) => record.marketId === marketId) ?? null;
+    return {
+      kind: "interval" as const,
+      marketId,
+      metric: registry?.metric?.toUpperCase() ?? "Interval",
+      sessionId: registry?.sessionId ?? null,
+      side: log.args.isAbove ? "Above" : "Below",
+      amount: (log.args.collateralIn ?? 0n).toString(),
+      amountFormatted: formatTradeAmount(log.args.collateralIn ?? 0n),
+      account,
+      txHash: log.transactionHash,
+      blockNumber: log.blockNumber.toString(),
+      logIndex: Number(log.logIndex ?? 0),
+      marketLabel: registry
+        ? `${registry.metric.toUpperCase()} ${formatElapsedWindow(registry.windowStartElapsedMs, registry.windowEndElapsedMs)}`
+        : `Interval market #${marketId}`,
+      referenceValue: registry?.referenceValue ?? null,
+      status: registry?.settledAt ? "settled" : "recorded",
+      settledOutcomeAbove: registry?.settledOutcomeAbove ?? null,
+      settledObservedValue: registry?.settledObservedValue ?? null,
+    };
+  });
+
+  const ledgerTrades = [
+    ...Object.values(loadTradeLedger()),
+    ...await loadTradeLedgerFromSupabase(),
+  ];
+  const byKey = new Map<string, TradeLedgerRecord | (typeof thresholdTrades)[number] | (typeof intervalTrades)[number]>();
+  for (const trade of ledgerTrades) {
+    byKey.set(adminTradeKey(trade), trade);
+  }
+  for (const trade of [...thresholdTrades, ...intervalTrades]) {
+    byKey.set(adminTradeKey(trade), trade);
+  }
+
+  return [...byKey.values()]
+    .sort((left, right) => {
+      const rightBlock = right.blockNumber === null ? 0n : BigInt(right.blockNumber);
+      const leftBlock = left.blockNumber === null ? 0n : BigInt(left.blockNumber);
+      const blockDelta = rightBlock - leftBlock;
+      if (blockDelta !== 0n) {
+        return blockDelta > 0n ? 1 : -1;
+      }
+      return (right.logIndex ?? 0) - (left.logIndex ?? 0);
+    })
+    .slice(0, limit);
+}
+
+function adminTradeKey(trade: {
+  txHash: string;
+  marketId: number;
+  account: string;
+  side: string;
+}) {
+  return `${trade.txHash.toLowerCase()}:${trade.marketId}:${trade.account.toLowerCase()}:${trade.side}`;
+}
+
+function formatTradeAmount(value: bigint) {
+  return Number(formatUnits(value, TRADING_UNIT_DECIMALS)).toString();
+}
+
+function signalMetricLabel(signalType: number | null | undefined) {
+  switch (signalType) {
+    case 1:
+      return "RR";
+    case 2:
+      return "Steps";
+    case 0:
+      return "HR";
+    default:
+      return "Threshold";
+  }
+}
+
+function formatElapsedWindow(startElapsedMs: number, endElapsedMs: number) {
+  return `${Math.round(startElapsedMs / 60_000)}-${Math.round(endElapsedMs / 60_000)}m`;
+}
+
+function normalizeEmail(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : null;
+}
+
+function spectatorAuthToken(req: import("node:http").IncomingMessage) {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice("Bearer ".length).trim();
+  }
+  const tokenHeader = req.headers["x-spectator-token"];
+  return typeof tokenHeader === "string" ? tokenHeader.trim() : null;
+}
+
+function loadSpectatorByToken(token: string | null) {
+  if (!token) {
+    return null;
+  }
+  const store = loadSpectatorStore();
+  return Object.values(store).find((spectator) => spectator.authToken === token) ?? null;
+}
+
+async function loadSpectatorByTokenWithSupabase(token: string | null) {
+  const local = loadSpectatorByToken(token);
+  if (local || !token || !supabaseTelemetryEnabled) {
+    return local;
+  }
+  try {
+    const encoded = encodeURIComponent(token);
+    const rows = await supabaseRequest<SupabaseSpectatorRow[]>(
+      `app_spectators?auth_token=eq.${encoded}&limit=1`,
+      { method: "GET" },
+    );
+    if (!rows || rows.length === 0) {
+      return null;
+    }
+    const record = rowToSpectatorRecord(rows[0]);
+    const store = loadSpectatorStore();
+    store[record.email] = record;
+    saveSpectatorStore(store);
+    return record;
+  } catch (error) {
+    console.error("[spectator] supabase token lookup failed:", error);
+    return null;
+  }
+}
+
+function createSpectatorWallet() {
+  const privateKey = `0x${randomBytes(32).toString("hex")}` as `0x${string}`;
+  const account = privateKeyToAccount(privateKey);
+  return {
+    privateKey,
+    walletAddress: account.address,
+  };
+}
+
+async function fundWalletIfNeeded(walletAddress: `0x${string}`, amount: bigint) {
+  if (!faucetPrivateKey || !collateralTokenAddress) {
+    throw new Error("Server faucet is not configured");
+  }
+  const account = privateKeyToAccount(normalizePrivateKey(faucetPrivateKey));
+  const walletClient = createWalletClient({
+    account,
+    chain: arcTestnetChain,
+    transport: http(baseRpcUrl),
+  });
+  const faucetBalance = await publicClient.readContract({
+    address: collateralTokenAddress as `0x${string}`,
+    abi: collateralTokenAbi,
+    functionName: "balanceOf",
+    args: [account.address],
+  });
+  if (faucetBalance < amount) {
+    throw new Error(
+      `Faucet wallet ${account.address} has insufficient collateral (${faucetBalance} < ${amount}). Top it up at https://faucet.circle.com/.`,
+    );
+  }
+  const txHash = await walletClient.writeContract({
+    address: collateralTokenAddress as `0x${string}`,
+    abi: collateralTokenAbi,
+    functionName: "transfer",
+    args: [walletAddress, amount],
+  });
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
+
+async function approveSpectatorWalletIfNeeded(spectator: SpectatorRecord) {
+  if (!collateralTokenAddress) {
+    throw new Error("Collateral token is not configured");
+  }
+  const account = privateKeyToAccount(normalizePrivateKey(spectator.privateKey));
+  const walletClient = createWalletClient({
+    account,
+    chain: arcTestnetChain,
+    transport: http(baseRpcUrl),
+  });
+  const maxAllowance = 2n ** 256n - 1n;
+  const approvals: Array<{ spender: `0x${string}`; label: string }> = [];
+
+  if (predictionMarketAddress) {
+    const thresholdAddress = getAddress(predictionMarketAddress);
+    const allowance = await publicClient.readContract({
+      address: collateralTokenAddress as `0x${string}`,
+      abi: collateralTokenAbi,
+      functionName: "allowance",
+      args: [account.address, thresholdAddress],
+    });
+    if (allowance < spectatorFundingAmount) {
+      approvals.push({ spender: thresholdAddress, label: "threshold" });
+    }
+  }
+
+  if (parimutuelIntervalMarketAddress) {
+    const intervalAddress = getAddress(parimutuelIntervalMarketAddress);
+    const allowance = await publicClient.readContract({
+      address: collateralTokenAddress as `0x${string}`,
+      abi: collateralTokenAbi,
+      functionName: "allowance",
+      args: [account.address, intervalAddress],
+    });
+    if (allowance < spectatorFundingAmount) {
+      approvals.push({ spender: intervalAddress, label: "interval" });
+    }
+  }
+
+  for (const approval of approvals) {
+    const txHash = await walletClient.writeContract({
+      address: collateralTokenAddress as `0x${string}`,
+      abi: collateralTokenAbi,
+      functionName: "approve",
+      args: [approval.spender, maxAllowance],
+    });
+    await publicClient.waitForTransactionReceipt({ hash: txHash });
+  }
+}
+
+async function ensureSpectatorProvisioned(email: string) {
+  const store = loadSpectatorStore();
+  const existing = store[email];
+  const now = new Date().toISOString();
+  const authToken = randomUUID();
+  const spectator = existing ?? (() => {
+    const wallet = createSpectatorWallet();
+    return {
+      spectatorId: randomUUID(),
+      email,
+      authToken,
+      walletAddress: wallet.walletAddress,
+      privateKey: wallet.privateKey,
+      provider: "local" as const,
+      createdAt: now,
+      lastActiveAt: now,
+      fundedAt: null,
+      fundedAmount: null,
+      fundingTxHash: null,
+      approvedAt: null,
+    } satisfies SpectatorRecord;
+  })();
+
+  spectator.authToken = authToken;
+  spectator.lastActiveAt = now;
+
+  if (!spectator.fundedAt) {
+    const txHash = await fundWalletIfNeeded(spectator.walletAddress as `0x${string}`, spectatorFundingAmount);
+    spectator.fundedAt = now;
+    spectator.fundingTxHash = txHash;
+    spectator.fundedAmount = spectatorFundingAmount.toString();
+  }
+
+  if (!spectator.approvedAt) {
+    await approveSpectatorWalletIfNeeded(spectator);
+    spectator.approvedAt = new Date().toISOString();
+  }
+
+  store[email] = spectator;
+  saveSpectatorStore(store);
+  try {
+    await persistSpectatorToSupabase(spectator);
+  } catch (error) {
+    console.error("[spectator] persist failed:", error);
+  }
+  return spectator;
+}
+
+async function executeSpectatorContract(spectator: SpectatorRecord, request: {
+  address: `0x${string}`;
+  abi: typeof predictionMarketAbi | typeof parimutuelIntervalMarketAbi;
+  functionName: string;
+  args: readonly unknown[];
+}) {
+  const account = privateKeyToAccount(normalizePrivateKey(spectator.privateKey));
+  const walletClient = createWalletClient({
+    account,
+    chain: arcTestnetChain,
+    transport: http(baseRpcUrl),
+  });
+  const txHash = await walletClient.writeContract({
+    account,
+    chain: arcTestnetChain,
+    address: request.address,
+    abi: request.abi,
+    functionName: request.functionName as never,
+    args: request.args as never,
+  });
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
+
+function spectatorResponsePayload(spectator: SpectatorRecord) {
+  return {
+    ok: true,
+    spectatorId: spectator.spectatorId,
+    email: spectator.email,
+    authToken: spectator.authToken,
+    walletAddress: spectator.walletAddress,
+    provider: spectator.provider,
+    fundedAt: spectator.fundedAt,
+    fundedAmount: spectator.fundedAmount,
+    fundedAmountFormatted: spectator.fundedAmount
+      ? Number(formatUnits(BigInt(spectator.fundedAmount), TRADING_UNIT_DECIMALS)).toString()
+      : null,
+    approvedAt: spectator.approvedAt,
+    fundingTxHash: spectator.fundingTxHash,
+  };
+}
+
+const LEADERBOARD_ADJECTIVES = ["Bold","Brave","Calm","Dark","Fast","Gold","Iron","Keen","Lean","Mega","Neat","Pure","Quick","Rare","Slim","Tall","Wild","Cool","Epic","Free"];
+const LEADERBOARD_ANIMALS = ["Bear","Cat","Deer","Eagle","Fox","Goat","Hawk","Ibis","Jay","Kite","Lion","Moose","Newt","Owl","Panda","Quail","Raven","Swan","Tiger","Wolf"];
+
+function animalNameFromId(id: string): string {
+  let h = 5381;
+  for (let i = 0; i < id.length; i++) {
+    h = ((h << 5) + h + id.charCodeAt(i)) & 0xffffffff;
+  }
+  const pos = Math.abs(h);
+  const adj = LEADERBOARD_ADJECTIVES[pos % LEADERBOARD_ADJECTIVES.length];
+  const h2 = Math.abs(((h << 3) ^ (h >> 5) ^ 0x1234abcd) & 0xffffffff);
+  const ani = LEADERBOARD_ANIMALS[h2 % LEADERBOARD_ANIMALS.length];
+  return `${adj} ${ani}`;
 }
 
 function normalizePrivateKey(value: string) {
@@ -2701,12 +3936,12 @@ async function ensureVisibleIntervalMarketsUnlocked(sessionId: string, metric: "
   }
   const samples = (store.samples[sessionId] ?? []).slice().sort((a, b) => a.elapsedMsSinceSessionStart - b.elapsedMsSinceSessionStart);
   if (samples.length === 0) {
-    throw new Error("Current 5-minute interval is not available yet");
+    throw new Error(`Current ${LIVE_INTERVAL_MINUTES}-minute interval is not available yet`);
   }
 
-  const specs = await visibleIntervalSpecs(session, metric);
+  const specs = buildVisibleIntervalSpecs(session, samples, metric);
   if (specs.length === 0) {
-    throw new Error("Current 5-minute interval is not available yet");
+    throw new Error(`Current ${LIVE_INTERVAL_MINUTES}-minute interval is not available yet`);
   }
 
   const registry = loadMarketRegistry();
@@ -2732,7 +3967,7 @@ async function ensureVisibleIntervalMarketsUnlocked(sessionId: string, metric: "
     const existing = Object.values(registry).find((record) => (
       record.type === intervalRegistryType(metric) &&
       record.referenceId === sessionId &&
-      record.intervalMinutes === 5 &&
+      record.intervalMinutes === LIVE_INTERVAL_MINUTES &&
       intervalRecordReferenceValue(record, metric) === spec.referenceValue &&
       record.createdAt >= new Date(spec.startAt).toISOString() &&
       record.createdAt < new Date(spec.endAt).toISOString()
@@ -2768,6 +4003,7 @@ async function ensureVisibleIntervalMarketsUnlocked(sessionId: string, metric: "
         ],
       }),
       nonce: nonceCursor.value++,
+      gas: intervalAutomationGasLimit,
       maxFeePerGas: intervalMaxFeePerGas,
       maxPriorityFeePerGas: intervalMaxPriorityFeePerGas,
     });
@@ -2780,7 +4016,7 @@ async function ensureVisibleIntervalMarketsUnlocked(sessionId: string, metric: "
       threshold: spec.referenceValue,
       direction: "over",
       signalType: signalTypeForMetric(metric),
-      intervalMinutes: 5,
+      intervalMinutes: LIVE_INTERVAL_MINUTES,
       windowStartElapsedMs: spec.startElapsedMs,
       windowEndElapsedMs: spec.endElapsedMs,
       referenceBpm: metric === "hr" ? spec.referenceValue : null,
@@ -2856,7 +4092,7 @@ async function settleDueIntervalMarkets(
     }
 
     if (metric === "steps") {
-      const resolved = resolveWindowSignalDelta(samples, Math.max(0, t - 5 * 60_000), t, 3);
+      const resolved = resolveWindowSignalDelta(samples, Math.max(0, t - LIVE_INTERVAL_MS), t, 3);
       if (!resolved) {
         continue;
       }
@@ -2929,6 +4165,7 @@ async function sendPredictionMarketTx(
       args: args as never,
     }),
     nonce: nonceCursor.value++,
+    gas: intervalAutomationGasLimit,
     maxFeePerGas: intervalMaxFeePerGas,
     maxPriorityFeePerGas: intervalMaxPriorityFeePerGas,
   });
@@ -2965,6 +4202,7 @@ async function ensureIntervalOperatorBalanceAndApproval(
       functionName: "approve",
       args: [predictionMarketAddress as `0x${string}`, autoIntervalSeedAmount * 1000000n],
       nonce: nonceCursor.value++,
+      gas: intervalAutomationGasLimit,
       maxFeePerGas: intervalMaxFeePerGas,
       maxPriorityFeePerGas: intervalMaxPriorityFeePerGas,
     });
@@ -2992,9 +4230,12 @@ function intervalRecordReferenceValue(record: MarketRegistryRecord, metric: "hr"
   return record.referenceBpm ?? record.threshold;
 }
 
-async function visibleIntervalSpecs(session: TelemetrySessionRecord, metric: "hr" | "rr" | "steps") {
-  const store = await loadTelemetryStoreAsync();
-  const samples = (store.samples[session.sessionId] ?? []).slice().sort((a, b) => a.elapsedMsSinceSessionStart - b.elapsedMsSinceSessionStart);
+function buildVisibleIntervalSpecs(
+  session: TelemetrySessionRecord,
+  samples: TelemetrySampleRecord[],
+  metric: "hr" | "rr" | "steps",
+  futureIntervalCount = 0,
+) {
   if (samples.length === 0) {
     return [];
   }
@@ -3004,7 +4245,7 @@ async function visibleIntervalSpecs(session: TelemetrySessionRecord, metric: "hr
   const nowElapsedMs = session.status === "active"
     ? Math.max(wallClockElapsedMs, latestSampleElapsedMs)
     : latestSampleElapsedMs;
-  const intervalMs = 5 * 60_000;
+  const intervalMs = LIVE_INTERVAL_MS;
   const startElapsedMs = Math.floor(nowElapsedMs / intervalMs) * intervalMs;
   const specs: Array<{
     startElapsedMs: number;
@@ -3013,7 +4254,7 @@ async function visibleIntervalSpecs(session: TelemetrySessionRecord, metric: "hr
     endAt: Date;
     referenceValue: number;
   }> = [];
-  for (let offset = 3; offset >= 0; offset -= 1) {
+  for (let offset = 3; offset >= -futureIntervalCount; offset -= 1) {
     const currentStartElapsedMs = startElapsedMs - offset * intervalMs;
     if (currentStartElapsedMs < 0) {
       continue;
@@ -3040,8 +4281,9 @@ async function visibleIntervalSpecs(session: TelemetrySessionRecord, metric: "hr
   return specs;
 }
 
-async function createAutomatedIntervalMarket(
+async function createAutomatedIntervalMarkets(
   session: ReturnType<typeof summarizeSessions>[number],
+  samples: TelemetrySampleRecord[],
   metric: "hr" | "rr" | "steps",
   walletClient: ReturnType<typeof createWalletClient>,
   account: ReturnType<typeof privateKeyToAccount>,
@@ -3051,66 +4293,103 @@ async function createAutomatedIntervalMarket(
     return;
   }
 
-  const specs = await visibleIntervalSpecs(session, metric);
-  const currentSpec = specs.at(-1);
-  if (!currentSpec) {
+  const specs = buildVisibleIntervalSpecs(session, samples, metric, 1);
+  const openSpecs = specs.filter((spec) => Math.floor(spec.endAt.getTime() / 1000) > Math.floor(Date.now() / 1000));
+  if (openSpecs.length === 0) {
     return;
   }
-
-  const existing = Object.values(loadIntervalMarketRegistry()).find((record) => (
-    record.sessionId === session.sessionId &&
-    record.metric === metric &&
-    record.windowStartElapsedMs === currentSpec.startElapsedMs
-  ));
-  if (existing) {
-    return;
-  }
-
-  const closesAtTimestamp = Math.floor(currentSpec.endAt.getTime() / 1000);
-  if (closesAtTimestamp <= Math.floor(Date.now() / 1000)) {
-    return;
-  }
-
-  const nextMarketId = await publicClient.readContract({
-    address: parimutuelIntervalMarketAddress as `0x${string}`,
-    abi: parimutuelIntervalMarketAbi,
-    functionName: "nextMarketId",
-  });
-
-  const txHash = await walletClient.writeContract({
-    account,
-    chain: arcTestnetChain,
-    address: parimutuelIntervalMarketAddress as `0x${string}`,
-    abi: parimutuelIntervalMarketAbi,
-    functionName: "createIntervalMarket",
-    args: [
-      hashMetricSessionId(session.sessionId, metric),
-      BigInt(currentSpec.startElapsedMs),
-      BigInt(currentSpec.endElapsedMs),
-      BigInt(closesAtTimestamp),
-      BigInt(currentSpec.referenceValue),
-      signalTypeForMetric(metric),
-    ],
-    nonce: nonceCursor.value++,
-    maxFeePerGas: intervalMaxFeePerGas,
-    maxPriorityFeePerGas: intervalMaxPriorityFeePerGas,
-  });
-  await publicClient.waitForTransactionReceipt({ hash: txHash });
 
   const store = loadIntervalMarketRegistry();
-  const key = intervalMarketRecordKey(session.sessionId, metric, currentSpec.startElapsedMs);
-  store[key] = {
-    marketId: Number(nextMarketId),
-    sessionId: session.sessionId,
-    metric,
-    signalType: signalTypeForMetric(metric),
-    referenceValue: currentSpec.referenceValue,
-    windowStartElapsedMs: currentSpec.startElapsedMs,
-    windowEndElapsedMs: currentSpec.endElapsedMs,
-    tradingClosesAtTimestamp: closesAtTimestamp,
-    createdAt: currentSpec.startAt.toISOString(),
-  };
+  for (const spec of openSpecs) {
+    const existing = Object.values(store).find((record) => (
+      record.contractAddress === parimutuelIntervalMarketAddress &&
+      (record.windowEndElapsedMs - record.windowStartElapsedMs) === LIVE_INTERVAL_MS &&
+      record.sessionId === session.sessionId &&
+      record.metric === metric &&
+      record.windowStartElapsedMs === spec.startElapsedMs
+    ));
+    if (existing) {
+      continue;
+    }
+
+    const closesAtTimestamp = Math.floor(spec.endAt.getTime() / 1000);
+    if (closesAtTimestamp <= Math.floor(Date.now() / 1000)) {
+      continue;
+    }
+
+    const nextMarketId = await publicClient.readContract({
+      address: parimutuelIntervalMarketAddress as `0x${string}`,
+      abi: parimutuelIntervalMarketAbi,
+      functionName: "nextMarketId",
+    });
+
+    const txHash = await walletClient.writeContract({
+      account,
+      chain: arcTestnetChain,
+      address: parimutuelIntervalMarketAddress as `0x${string}`,
+      abi: parimutuelIntervalMarketAbi,
+      functionName: "createIntervalMarket",
+      args: [
+        hashMetricSessionId(session.sessionId, metric),
+        BigInt(spec.startElapsedMs),
+        BigInt(spec.endElapsedMs),
+        BigInt(closesAtTimestamp),
+        BigInt(spec.referenceValue),
+        signalTypeForMetric(metric),
+      ],
+      nonce: nonceCursor.value++,
+      gas: intervalAutomationGasLimit,
+      maxFeePerGas: intervalMaxFeePerGas,
+      maxPriorityFeePerGas: intervalMaxPriorityFeePerGas,
+    });
+    await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    const key = intervalMarketRecordKey(session.sessionId, metric, spec.startElapsedMs);
+    store[key] = {
+      marketId: Number(nextMarketId),
+      sessionId: session.sessionId,
+      metric,
+      signalType: signalTypeForMetric(metric),
+      contractAddress: parimutuelIntervalMarketAddress,
+      createdTxHash: txHash,
+      referenceValue: spec.referenceValue,
+      windowStartElapsedMs: spec.startElapsedMs,
+      windowEndElapsedMs: spec.endElapsedMs,
+      tradingClosesAtTimestamp: closesAtTimestamp,
+      createdAt: spec.startAt.toISOString(),
+    };
+  }
   saveIntervalMarketRegistry(store);
+}
+
+async function loadIntervalAutomationSessionDataAsync(): Promise<{
+  session: TelemetrySessionSummary;
+  samples: TelemetrySampleRecord[];
+} | null> {
+  const store = await loadTelemetryStoreAsync();
+  const session = summarizeSessions(store)
+    .filter((candidate) => (
+      candidate.status === "active" &&
+      (candidate.sampleCount ?? 0) > 0 &&
+      candidate.notes !== "Auto-recovered from sample upload"
+    ))
+    .sort((left, right) => {
+      const leftSampleTime = Date.parse(left.lastSampleAt ?? left.createdAt);
+      const rightSampleTime = Date.parse(right.lastSampleAt ?? right.createdAt);
+      if (leftSampleTime !== rightSampleTime) {
+        return rightSampleTime - leftSampleTime;
+      }
+      return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+    })[0] ?? null;
+  if (!session) {
+    return null;
+  }
+
+  const samples = getSortedSamples(store, session.sessionId);
+  if (samples.length === 0) {
+    return null;
+  }
+  return { session, samples };
 }
 
 async function settleAutomatedIntervalMarkets(
@@ -3124,8 +4403,14 @@ async function settleAutomatedIntervalMarkets(
     return;
   }
 
-  const records = Object.values(loadIntervalMarketRegistry())
-    .filter((record) => record.sessionId === session.sessionId)
+  const store = loadIntervalMarketRegistry();
+  let registryChanged = false;
+  const records = Object.values(store)
+    .filter((record) => (
+      record.contractAddress === parimutuelIntervalMarketAddress &&
+      (record.windowEndElapsedMs - record.windowStartElapsedMs) === LIVE_INTERVAL_MS &&
+      record.sessionId === session.sessionId
+    ))
     .sort((left, right) => left.windowStartElapsedMs - right.windowStartElapsedMs);
 
   for (const record of records) {
@@ -3179,10 +4464,27 @@ async function settleAutomatedIntervalMarkets(
         BigInt(sampleElapsedMs),
       ],
       nonce: nonceCursor.value++,
+      gas: intervalAutomationGasLimit,
       maxFeePerGas: intervalMaxFeePerGas,
       maxPriorityFeePerGas: intervalMaxPriorityFeePerGas,
     });
     await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    const key = intervalMarketRecordKey(record.sessionId, record.metric, record.windowStartElapsedMs);
+    store[key] = {
+      ...record,
+      settledTxHash: txHash,
+      settledAt: new Date().toISOString(),
+      settledOutcomeAbove: observedValue > record.referenceValue,
+      settledObservedValue: observedValue,
+      settledSampleSeq: sampleSeq,
+      settledSampleElapsedMs: sampleElapsedMs,
+    };
+    registryChanged = true;
+  }
+
+  if (registryChanged) {
+    saveIntervalMarketRegistry(store);
   }
 }
 
@@ -3193,13 +4495,13 @@ async function runIntervalAutomationTick() {
 
   intervalAutomationInFlight = true;
   try {
-    const store = await loadTelemetryStoreAsync();
-    const session = selectCurrentLiveSession(store);
-    if (!session) {
+    const current = await loadIntervalAutomationSessionDataAsync();
+    if (!current) {
       return;
     }
 
-    const samples = getSortedSamples(store, session.sessionId);
+    const session = current.session;
+    const samples = current.samples;
     if (samples.length === 0) {
       return;
     }
@@ -3218,7 +4520,12 @@ async function runIntervalAutomationTick() {
     };
 
     for (const metric of ["hr", "rr", "steps"] as const) {
-      await createAutomatedIntervalMarket(session, metric, walletClient, account, nonceCursor);
+      try {
+        await createAutomatedIntervalMarkets(session, samples, metric, walletClient, account, nonceCursor);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`interval market publish failed for ${metric}:`, message);
+      }
     }
     await settleAutomatedIntervalMarkets(session, samples, walletClient, account, nonceCursor);
   } catch (error) {
