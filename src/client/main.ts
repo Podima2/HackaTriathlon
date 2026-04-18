@@ -110,7 +110,6 @@ const ONCHAIN_REFRESH_INTERVAL_MS = 60_000;
 const ADMIN_TRADES_REFRESH_INTERVAL_MS = 5 * 60_000;
 const SHOW_RR_INTERVAL_EXPERIENCE = false;
 const isAdminRoute = window.location.pathname === "/admin";
-const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 let revealObserver: IntersectionObserver | null = null;
 let privyClientPromise: Promise<Privy> | null = null;
 
