@@ -4951,6 +4951,19 @@ function hasConfiguredBroadcast() {
   return Boolean(url) && !url.includes("YOUR_CHANNEL_ID");
 }
 
+function normalisedEmbedUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    // Switch to nocookie domain — avoids cookie-consent blocks on mobile
+    url.hostname = url.hostname.replace("youtube.com", "youtube-nocookie.com");
+    // iOS Safari requires playsinline=1 to play inside an iframe
+    url.searchParams.set("playsinline", "1");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 function broadcastMediaMarkup() {
   if (!hasConfiguredBroadcast()) {
     return `
@@ -4960,13 +4973,13 @@ function broadcastMediaMarkup() {
       </div>
     `;
   }
+  const src = escapeHtml(normalisedEmbedUrl(state.youtubeUrl));
   return `
     <iframe
       id="youtube-embed"
-      src="${escapeHtml(state.youtubeUrl)}"
+      src="${src}"
       title="Live stream"
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-      referrerpolicy="strict-origin-when-cross-origin"
       allowfullscreen
     ></iframe>
   `;
