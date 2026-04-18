@@ -36,8 +36,10 @@
   box-sizing: border-box;
 }
 
-html {
-  overflow-x: hidden;
+html,
+body {
+  overflow-x: clip;
+  max-width: 100%;
 }
 
 body {
@@ -236,13 +238,25 @@ a {
   overflow-wrap: anywhere;
 }
 
+.topbar.mobile-top,
+.topbar.admin-top {
+  grid-template-columns: 1fr auto;
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
 .topbar h1 {
   margin: 6px 0 10px;
   font-family: "Archivo Expanded", "Instrument Sans", sans-serif;
-  font-size: clamp(2rem, 8vw, 3.8rem);
+  font-size: clamp(1.5rem, 6vw, 3.8rem);
   line-height: 0.9;
   letter-spacing: -0.04em;
   color: white;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .lede {
@@ -1758,13 +1772,8 @@ button:focus-visible,
 
 @media (min-width: 720px) {
   .app-shell {
-    width: min(100vw - 40px, 1280px);
+    width: min(calc(100% - 40px), 1280px);
     padding-top: 28px;
-  }
-
-  .topbar.mobile-top,
-  .topbar.admin-top {
-    grid-template-columns: 1fr auto;
   }
 
   .onboarding {
@@ -1878,7 +1887,7 @@ button:focus-visible,
   }
 
   .topbar.mobile-top h1 {
-    font-size: clamp(2.05rem, 12vw, 3.4rem);
+    font-size: clamp(1.5rem, 6vw, 2.8rem);
     line-height: 0.86;
   }
 

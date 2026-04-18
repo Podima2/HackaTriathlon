@@ -3585,7 +3585,9 @@ function renderWallet() {
   }
   const topbarPoints = document.querySelector<HTMLElement>("#account-topbar-points");
   if (topbarPoints) {
-    topbarPoints.textContent = state.spectator ? `${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}` : "";
+    topbarPoints.textContent = (state.spectator || state.account) && state.balance > 0n
+      ? `${formatDisplay(state.balance)} ${TRADING_UNIT_LABEL}`
+      : "";
   }
   renderAccountOpenPositions();
   updateNudgeAnimation();

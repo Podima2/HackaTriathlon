@@ -676,36 +676,33 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/leaderboard") {
     const requestingSpectator = await loadSpectatorByTokenWithSupabase(spectatorAuthToken(req));
+    // Merge local store with Supabase so Railway deployments see all spectators
+    await hydrateSpectatorsFromSupabase();
     const store = loadSpectatorStore();
     const spectators = Object.values(store);
-    const entries = await Promise.all(
-      spectators.map(async (s) => {
-        let points = 0n;
-        try {
-          points = await publicClient.readContract({
-            address: collateralTokenAddress as `0x${string}`,
-            abi: collateralTokenAbi,
-            functionName: "balanceOf",
-            args: [getAddress(s.walletAddress)],
-          }) as bigint;
-        } catch {
-          points = 0n;
-        }
-        return {
-          spectatorId: s.spectatorId,
-          animalName: animalNameFromId(s.spectatorId),
-          points,
-          isCurrentUser: requestingSpectator?.spectatorId === s.spectatorId,
-        };
-      }),
+    const results = await Promise.allSettled(
+      spectators.map((s) =>
+        publicClient.readContract({
+          address: collateralTokenAddress as `0x${string}`,
+          abi: collateralTokenAbi,
+          functionName: "balanceOf",
+          args: [getAddress(s.walletAddress)],
+        }) as Promise<bigint>,
+      ),
     );
+    const entries = spectators.map((s, i) => ({
+      spectatorId: s.spectatorId,
+      animalName: animalNameFromId(s.spectatorId),
+      points: results[i]?.status === "fulfilled" ? results[i].value : 0n,
+      isCurrentUser: requestingSpectator?.spectatorId === s.spectatorId,
+    }));
     entries.sort((a, b) => (b.points > a.points ? 1 : b.points < a.points ? -1 : 0));
     return sendJson(res, 200, {
       ok: true,
       entries: entries.map((e, i) => ({
         rank: i + 1,
         animalName: e.animalName,
-        points: formatUnits(e.points, TRADING_UNIT_DECIMALS),
+        points: Number(formatUnits(e.points, TRADING_UNIT_DECIMALS)).toFixed(3),
         isCurrentUser: e.isCurrentUser,
       })),
     });
