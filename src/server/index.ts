@@ -559,19 +559,27 @@ ensureSwimStorage();
 ensureMarketRegistryStorage();
 ensureIntervalMarketRegistryStorage();
 
-const broadcastConfigFilePath = join(process.cwd(), "data", "broadcast-config.json");
-type BroadcastConfig = { youtubeUrl?: string };
-function loadBroadcastConfig(): BroadcastConfig {
-  try {
-    if (existsSync(broadcastConfigFilePath)) {
-      return JSON.parse(readFileSync(broadcastConfigFilePath, "utf8")) as BroadcastConfig;
-    }
-  } catch {}
-  return {};
+async function loadYoutubeUrl(): Promise<string> {
+  // Supabase is the source of truth; env var is a fallback for local dev
+  if (supabaseTelemetryEnabled) {
+    try {
+      const rows = await supabaseRequest<{ key: string; value: string }[]>(
+        "app_config?key=eq.youtubeUrl&select=value",
+      );
+      if (Array.isArray(rows) && rows.length > 0) return rows[0].value;
+    } catch {}
+  }
+  return process.env.YOUTUBE_EMBED_URL ?? "";
 }
-function saveBroadcastConfig(config: BroadcastConfig) {
-  mkdirSync(join(process.cwd(), "data"), { recursive: true });
-  writeFileSync(broadcastConfigFilePath, JSON.stringify(config, null, 2));
+
+async function saveYoutubeUrl(url: string): Promise<void> {
+  if (supabaseTelemetryEnabled) {
+    await supabaseRequest("app_config", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ key: "youtubeUrl", value: url, updated_at: new Date().toISOString() }),
+    });
+  }
 }
 
 const server = createServer(async (req, res) => {
@@ -624,8 +632,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/config") {
-    const config = loadBroadcastConfig();
-    const youtubeUrl = config.youtubeUrl ?? process.env.YOUTUBE_EMBED_URL ?? "";
+    const youtubeUrl = await loadYoutubeUrl();
     return sendJson(res, 200, { ok: true, youtubeUrl });
   }
 
@@ -639,9 +646,7 @@ const server = createServer(async (req, res) => {
       if (youtubeUrl === undefined) {
         return sendJson(res, 400, { error: "Expected youtubeUrl" });
       }
-      const config = loadBroadcastConfig();
-      config.youtubeUrl = youtubeUrl;
-      saveBroadcastConfig(config);
+      await saveYoutubeUrl(youtubeUrl);
       return sendJson(res, 200, { ok: true, youtubeUrl });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save config";
