@@ -1953,40 +1953,14 @@ function setupContainerMotion() {
     target.style.setProperty("--reveal-delay", `${delay}ms`);
   }
 
-  if (prefersReducedMotion.matches) {
-    for (const target of targets) {
-      target.classList.add("is-visible");
-    }
-    return;
-  }
-
-  if (!("IntersectionObserver" in window)) {
+  // Trigger all reveals on load using the stagger delays already set,
+  // double-RAF ensures the initial hidden state is painted first.
+  requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       for (const target of targets) {
         target.classList.add("is-visible");
       }
     });
-    return;
-  }
-
-  revealObserver = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) {
-        continue;
-      }
-      const target = entry.target as HTMLElement;
-      target.classList.add("is-visible");
-      revealObserver?.unobserve(target);
-    }
-  }, {
-    threshold: 0.18,
-    rootMargin: "0px 0px -10% 0px",
-  });
-
-  requestAnimationFrame(() => {
-    for (const target of targets) {
-      revealObserver?.observe(target);
-    }
   });
 }
 
