@@ -125,8 +125,12 @@ let currentLang: "en" | "es" = (() => {
 const TR = {
   en: {
     "landing.kicker": "PreCannes access",
-    "landing.lede": "Enter the live broadcast desk with a funded testing wallet, then trade the current heart-rate and steps intervals from the main screen.",
-    "landing.cta": "Get started",
+    "landing.eyebrow": "Cannes · May 2026 · Triathlon",
+    "landing.lede": "Predict live athlete biometrics. Bet on heart rate and steps — settled on-chain.",
+    "landing.cta": "Enter the arena",
+    "landing.stat.hr": "Heart Rate Markets",
+    "landing.stat.steps": "Step Count Markets",
+    "landing.stat.chain": "On-chain Settlement",
     "nav.broadcast.kicker": "Broadcast board",
     "nav.broadcast.title": "Live broadcast",
     "nav.sponsored": "Sponsored by",
@@ -191,8 +195,12 @@ const TR = {
   },
   es: {
     "landing.kicker": "Acceso PreCannes",
-    "landing.lede": "Accede al escritorio de emisión en vivo con una cartera de prueba financiada, y opera en los intervalos actuales de frecuencia cardíaca y pasos.",
-    "landing.cta": "Comenzar",
+    "landing.eyebrow": "Cannes · Mayo 2026 · Triatlón",
+    "landing.lede": "Predice biomecánicas de atletas en vivo. Apuesta en frecuencia cardíaca y pasos — liquidado on-chain.",
+    "landing.cta": "Entrar al arena",
+    "landing.stat.hr": "Mercados de FC",
+    "landing.stat.steps": "Mercados de Pasos",
+    "landing.stat.chain": "Liquidación On-chain",
     "nav.broadcast.kicker": "Panel de emisión",
     "nav.broadcast.title": "Emisión en vivo",
     "nav.sponsored": "Patrocinado por",
@@ -849,19 +857,53 @@ function usingSpectatorWallet() {
 function renderLandingShell() {
   return `
     <div class="landing-shell">
-      <main class="landing-hero" data-reveal="hero" data-reveal-order="0">
-        <div class="landing-logo-lockup">
+      <div class="landing-orb landing-orb--warm" aria-hidden="true"></div>
+      <div class="landing-orb landing-orb--cool" aria-hidden="true"></div>
+
+      <header class="landing-header">
+        <div class="landing-sponsor">
           <img src="https://www.popbike.fr/templates/captain/img/interface/logo.svg" alt="Pop'Bike" class="landing-logo" />
+          <span>Pre·Cannes</span>
         </div>
-        <div class="landing-copy">
-          <div class="kicker" data-i18n="landing.kicker">${t("landing.kicker")}</div>
-          <h1>THE HACKATRIATHLON</h1>
-          <p class="lede" data-i18n="landing.lede">${t("landing.lede")}</p>
+        <div class="landing-live">
+          <span class="landing-live-dot"></span>
+          <span>LIVE EVENT</span>
         </div>
-        <div class="landing-actions">
-          <button id="landing-get-started" class="landing-primary" type="button" data-i18n="landing.cta">${t("landing.cta")}</button>
+      </header>
+
+      <main class="landing-main" data-reveal="hero" data-reveal-order="0">
+        <div class="landing-eyebrow" data-i18n="landing.eyebrow">${t("landing.eyebrow")}</div>
+
+        <h1 class="landing-title">
+          <span class="lt-line" style="--i:0">THE</span>
+          <span class="lt-line" style="--i:1">HACKA</span>
+          <span class="lt-line" style="--i:2">TRIATHLON</span>
+        </h1>
+
+        <div class="landing-ecg-wrap" aria-hidden="true">
+          <svg class="landing-ecg-svg" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+            <polyline class="ecg-trace" points="0,30 18,30 20,29 22,8 26,52 29,30 35,30 100,30 118,30 120,29 122,8 126,52 129,30 135,30 200,30"/>
+          </svg>
         </div>
+
+        <p class="landing-lede" data-i18n="landing.lede">${t("landing.lede")}</p>
+
+        <button id="landing-get-started" class="landing-cta" type="button">
+          <span data-i18n="landing.cta">${t("landing.cta")}</span>
+          <svg class="landing-cta-arrow" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M4 10h12M11 5l5 5-5 5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
       </main>
+
+      <footer class="landing-foot">
+        <span data-i18n="landing.stat.hr">${t("landing.stat.hr")}</span>
+        <span class="landing-foot-sep">·</span>
+        <span data-i18n="landing.stat.steps">${t("landing.stat.steps")}</span>
+        <span class="landing-foot-sep">·</span>
+        <span data-i18n="landing.stat.chain">${t("landing.stat.chain")}</span>
+      </footer>
+
       ${renderPrivyLoginModal()}
     </div>
   `;
