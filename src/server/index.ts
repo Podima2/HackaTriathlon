@@ -69,7 +69,7 @@ const serverFaucetEnabled = (process.env.ENABLE_SERVER_FAUCET ?? "").toLowerCase
 const autoIntervalSeedAmount = BigInt(process.env.AUTO_INTERVAL_SEED_AMOUNT || parseUnits("1", COLLATERAL_DECIMALS));
 const intervalMaxFeePerGas = parseGwei(process.env.AUTO_INTERVAL_MAX_FEE_GWEI || "160");
 const intervalMaxPriorityFeePerGas = parseGwei(process.env.AUTO_INTERVAL_MAX_PRIORITY_FEE_GWEI || "1");
-const intervalAutomationGasLimit = BigInt(process.env.AUTO_INTERVAL_GAS_LIMIT || "300000");
+const intervalAutomationGasLimit = BigInt(process.env.AUTO_INTERVAL_GAS_LIMIT || "180000");
 const enableIntervalAutomation = (process.env.ENABLE_INTERVAL_AUTOMATION ?? "true").toLowerCase() === "true";
 const intervalAutomationPollMs = Number(process.env.INTERVAL_AUTOMATION_POLL_MS ?? 1_000);
 const marketEventsFromBlock = BigInt(process.env.MARKET_EVENTS_FROM_BLOCK || "0");
