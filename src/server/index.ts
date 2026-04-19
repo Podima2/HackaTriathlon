@@ -651,6 +651,41 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, youtubeUrl });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/debug/interval-automation") {
+    try {
+      const current = await loadIntervalAutomationSessionDataAsync();
+      const registry = loadIntervalMarketRegistry();
+      const account = faucetPrivateKey
+        ? privateKeyToAccount(normalizePrivateKey(faucetPrivateKey)).address
+        : null;
+      const specs = current
+        ? {
+            hr: buildVisibleIntervalSpecs(current.session, current.samples, "hr", 1),
+            rr: buildVisibleIntervalSpecs(current.session, current.samples, "rr", 1),
+            steps: buildVisibleIntervalSpecs(current.session, current.samples, "steps", 1),
+          }
+        : null;
+      return sendJson(res, 200, {
+        enableIntervalAutomation,
+        contractAddress: parimutuelIntervalMarketAddress || null,
+        operatorAddress: account,
+        hasFaucetKey: Boolean(faucetPrivateKey),
+        session: current ? { sessionId: current.session.sessionId, sampleCount: current.samples.length, lastElapsedMs: current.session.lastElapsedMs } : null,
+        registeredMarkets: Object.keys(registry).length,
+        specs: specs
+          ? {
+              hr: specs.hr.map((s) => ({ start: s.startElapsedMs, end: s.endElapsedMs, ref: s.referenceValue })),
+              rr: specs.rr.map((s) => ({ start: s.startElapsedMs, end: s.endElapsedMs, ref: s.referenceValue })),
+              steps: specs.steps.map((s) => ({ start: s.startElapsedMs, end: s.endElapsedMs, ref: s.referenceValue })),
+            }
+          : null,
+        nowMs: Date.now(),
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/api/admin/config") {
     try {
       const body = (await readJsonBody(req)) as { youtubeUrl?: string };
