@@ -816,11 +816,13 @@ const server = createServer(async (req, res) => {
         return sendJson(res, 400, { error: "Expected marketId, isYes, and a positive amount" });
       }
       const collateralIn = parseUnits(String(body.amount), TRADING_UNIT_DECIMALS);
+      const marketId = Math.trunc(body.marketId);
+      const isYes = body.isYes;
       const txHash = await executeSpectatorContract(spectator, {
         address: predictionMarketAddress as `0x${string}`,
         abi: predictionMarketAbi,
         functionName: "takePosition",
-        args: [BigInt(Math.trunc(body.marketId)), body.isYes, collateralIn],
+        args: [BigInt(marketId), isYes, collateralIn],
       });
       // Respond immediately so client can show the tx link; record in background.
       void (async () => {
@@ -828,8 +830,8 @@ const server = createServer(async (req, res) => {
           await publicClient.waitForTransactionReceipt({ hash: txHash });
           await recordSpectatorTrade({
             kind: "threshold",
-            marketId: Math.trunc(body.marketId),
-            side: body.isYes ? "Yes" : "No",
+            marketId,
+            side: isYes ? "Yes" : "No",
             amount: collateralIn,
             account: spectator.walletAddress,
             txHash,
@@ -867,11 +869,13 @@ const server = createServer(async (req, res) => {
         return sendJson(res, 400, { error: "Expected marketId, isAbove, and a positive amount" });
       }
       const collateralIn = parseUnits(String(body.amount), TRADING_UNIT_DECIMALS);
+      const marketId = Math.trunc(body.marketId);
+      const isAbove = body.isAbove;
       const txHash = await executeSpectatorContract(spectator, {
         address: getAddress(parimutuelIntervalMarketAddress),
         abi: parimutuelIntervalMarketAbi,
         functionName: "takePosition",
-        args: [BigInt(Math.trunc(body.marketId)), body.isAbove, collateralIn],
+        args: [BigInt(marketId), isAbove, collateralIn],
       });
       // Respond immediately so client can show the tx link; record in background.
       void (async () => {
@@ -879,8 +883,8 @@ const server = createServer(async (req, res) => {
           await publicClient.waitForTransactionReceipt({ hash: txHash });
           await recordSpectatorTrade({
             kind: "interval",
-            marketId: Math.trunc(body.marketId),
-            side: body.isAbove ? "Above" : "Below",
+            marketId,
+            side: isAbove ? "Above" : "Below",
             amount: collateralIn,
             account: spectator.walletAddress,
             txHash,
