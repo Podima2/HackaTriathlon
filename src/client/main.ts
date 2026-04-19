@@ -960,6 +960,8 @@ function startRefreshTimers() {
     return;
   }
   refreshTimersAttached = true;
+  // Poll server config every 60 s so the YouTube embed updates without a reload
+  window.setInterval(() => { void fetchServerConfig(); }, 60_000);
   renderMarketCountdowns();
   renderIntervalCountdown();
   window.setInterval(() => {
@@ -2736,7 +2738,7 @@ async function refreshAdminTrades() {
   if (!isAdminRoute) {
     return;
   }
-  const adminToken = getAdminApiToken();
+  const adminToken = getCachedAdminApiToken();
   if (!adminToken) {
     state.adminTradesStatus = "error";
     state.adminTradesError = "Enter the admin API key to load the trade feed.";
@@ -2828,19 +2830,10 @@ async function fetchAndRenderLeaderboard() {
   }
 }
 
-function getAdminApiToken() {
-  const cached = sessionStorage.getItem(ADMIN_API_KEY_STORAGE_KEY);
-  if (cached) {
-    return cached;
-  }
-  const entered = window.prompt("Admin API key");
-  const token = entered?.trim() ?? "";
-  if (!token) {
-    return null;
-  }
-  sessionStorage.setItem(ADMIN_API_KEY_STORAGE_KEY, token);
-  return token;
+function getCachedAdminApiToken() {
+  return sessionStorage.getItem(ADMIN_API_KEY_STORAGE_KEY) ?? null;
 }
+
 
 async function refreshWalletState() {
   renderWallet();
@@ -3137,7 +3130,9 @@ async function approveTokens() {
 
 async function ensureIntervalAllowance(requiredAmount: bigint) {
   if (usingSpectatorWallet()) {
-    return state.intervalAllowance >= requiredAmount;
+    // Server executes the on-chain transaction and manages its own approvals —
+    // the client-side allowance reading is irrelevant for spectator wallets.
+    return true;
   }
   if (!state.account) {
     setStatus("Connect wallet to trade", "warning");
@@ -3375,13 +3370,64 @@ async function takeIntervalPosition(
   inputId: string,
   metricLabel: string,
 ) {
+  const amount = parseNumberInput(inputId);
+  if (!amount) {
+    setStatus("Enter a position size", "warning");
+    return;
+  }
+  // Spectator wallets are fully managed server-side — skip all client-side
+  // balance/allowance/contract checks and let the server validate.
+  if (usingSpectatorWallet()) {
+    setStatus(`Submitting ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"}…`);
+    const payload = await spectatorRequest<{ txHash: string; explorerUrl?: string }>("/api/spectators/trade/interval", {
+      marketId: Number(marketId),
+      isAbove,
+      amount,
+    });
+    // Server returns txHash immediately on broadcast — show modal and explorer link right away.
+    const txHash = payload.txHash as `0x${string}`;
+    setStatus(`Submitted — waiting for confirmation…`, "success");
+    const metric = metricKeyForLabel(metricLabel);
+    const prediction: PendingPrediction = {
+      marketId,
+      metric,
+      metricLabel,
+      isAbove,
+      amount,
+      reference: activeIntervalReferenceForMetric(metric) ?? 0,
+      unit: metricUnitLabel(metric),
+      txHash,
+      notified: false,
+    };
+    recordPendingPrediction(prediction);
+    notifyPredictionPlaced(prediction);
+    // Wait for on-chain confirmation in the background then refresh position state.
+    void publicClient.waitForTransactionReceipt({ hash: txHash }).then(async () => {
+      setStatus(`Placed ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"} · ${shortenHash(txHash)}`, "success");
+      await refreshWalletState();
+      await refreshIntervalMarketRegistry();
+      await refreshSpectatorTrades().catch(() => {});
+      await refreshIntervalExperience();
+      if (SHOW_RR_INTERVAL_EXPERIENCE) {
+        await refreshRrIntervalExperience();
+      }
+      await refreshStepsIntervalExperience();
+      renderIntervalTradePanel();
+      if (SHOW_RR_INTERVAL_EXPERIENCE) {
+        renderRrIntervalTradePanel();
+      }
+      renderStepsIntervalTradePanel();
+    }).catch(() => {
+      setStatus(`Transaction may have failed — check explorer`, "warning");
+    });
+    return;
+  }
   if (!INTERVAL_MARKET_ADDRESS) {
     setStatus("Interval market contract is not configured", "error");
     return;
   }
-  const amount = parseNumberInput(inputId);
-  if (!amount) {
-    setStatus("Enter a position size", "warning");
+  if (!state.account) {
+    setStatus("Connect wallet to trade", "warning");
     return;
   }
   const collateralIn = parseUnits(String(amount), TRADING_UNIT_DECIMALS);
@@ -3392,49 +3438,6 @@ async function takeIntervalPosition(
   const approved = await ensureIntervalAllowance(collateralIn);
   if (!approved) {
     setStatus(`Enable ${COLLATERAL_SYMBOL} interval trading first`, "warning");
-    return;
-  }
-  if (usingSpectatorWallet()) {
-    setStatus(`Confirming ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"}…`);
-    const payload = await spectatorRequest<{ txHash: string; explorerUrl?: string }>("/api/spectators/trade/interval", {
-      marketId: Number(marketId),
-      isAbove,
-      amount,
-    });
-    setStatus(`Placed ${amount} ${TRADING_UNIT_LABEL} on ${metricLabel} ${isAbove ? "above" : "below"} · ${shortenHash(payload.txHash)}`, "success");
-    const metric = metricKeyForLabel(metricLabel);
-    const prediction: PendingPrediction = {
-      marketId,
-      metric,
-      metricLabel,
-      isAbove,
-      amount,
-      reference: activeIntervalReferenceForMetric(metric) ?? 0,
-      unit: metricUnitLabel(metric),
-      txHash: payload.txHash as `0x${string}`,
-      notified: false,
-    };
-    recordPendingPrediction(prediction);
-    notifyPredictionPlaced(prediction);
-    await refreshWalletState();
-    await refreshIntervalMarketRegistry();
-    await refreshSpectatorTrades().catch(() => {
-      // The local pending prediction still shows immediately if the ledger lags.
-    });
-    await refreshIntervalExperience();
-    if (SHOW_RR_INTERVAL_EXPERIENCE) {
-      await refreshRrIntervalExperience();
-    }
-    await refreshStepsIntervalExperience();
-    renderIntervalTradePanel();
-    if (SHOW_RR_INTERVAL_EXPERIENCE) {
-      renderRrIntervalTradePanel();
-    }
-    renderStepsIntervalTradePanel();
-    return;
-  }
-  if (!state.account) {
-    setStatus("Connect wallet to trade", "warning");
     return;
   }
   const walletClient = getWalletClient();
@@ -4667,9 +4670,9 @@ function renderIntervalTradePanel() {
   belowButton.classList.toggle("active", state.intervalSelectedSide === "below");
   aboveButton.classList.toggle("secondary", state.intervalSelectedSide !== "above");
   belowButton.classList.toggle("secondary", state.intervalSelectedSide !== "below");
-  tradeButton.disabled = !market || (market.status !== 0 && !intervalClaimable(market));
+  tradeButton.disabled = market ? (market.status !== 0 && !intervalClaimable(market)) : false;
   if (!market) {
-    returnCopy.textContent = "";
+    returnCopy.textContent = "Waiting for an active interval market…";
     tradeButton.textContent = t("trade.submit");
     return;
   }
@@ -4790,31 +4793,68 @@ function getWalletClient() {
   });
 }
 
+function toYoutubeEmbedUrl(input: string): string {
+  // Accept any YouTube URL format and return a clean embed URL
+  // Handles: youtu.be/ID, youtube.com/watch?v=ID, youtube.com/live/ID, youtube.com/embed/ID
+  try {
+    const u = new URL(input.trim());
+    let videoId: string | null = null;
+    if (u.hostname === "youtu.be") {
+      videoId = u.pathname.slice(1).split("?")[0];
+    } else if (u.hostname.includes("youtube.com")) {
+      if (u.pathname.startsWith("/embed/")) {
+        videoId = u.pathname.split("/embed/")[1].split("?")[0];
+      } else if (u.pathname.startsWith("/live/")) {
+        videoId = u.pathname.split("/live/")[1].split("?")[0];
+      } else {
+        videoId = u.searchParams.get("v");
+      }
+    }
+    if (videoId) {
+      return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1`;
+    }
+  } catch {}
+  return input.trim();
+}
+
 async function saveYoutubeUrl() {
-  const value = readInputValue("youtube-url");
-  if (!value) {
+  const raw = readInputValue("youtube-url");
+  if (!raw) {
     setStatus("Enter a YouTube embed URL", "warning");
     return;
   }
+  const value = toYoutubeEmbedUrl(raw);
+  console.log("[saveYoutubeUrl] normalised URL:", raw, "→", value);
   state.youtubeUrl = value;
   localStorage.setItem(YOUTUBE_STORAGE_KEY, value);
   renderBroadcastMedia();
   try {
-    const adminToken = getAdminApiToken();
-    if (adminToken) {
-      await fetch(apiUrl("/api/admin/config"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-token": adminToken },
-        body: JSON.stringify({ youtubeUrl: value }),
-      });
+    console.log("[saveYoutubeUrl] posting to /api/admin/config:", value);
+    const res = await fetch(apiUrl("/api/admin/config"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ youtubeUrl: value }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
+      const msg = data?.error ?? `HTTP ${res.status}`;
+      console.error("[saveYoutubeUrl] server rejected save:", res.status, msg);
+      setStatus(`Embed saved locally but server rejected save (${res.status}: ${msg})`, "warning");
+      return;
     }
-  } catch {}
+    console.log("[saveYoutubeUrl] server confirmed save");
+  } catch (err) {
+    console.error("[saveYoutubeUrl] network error:", err);
+    setStatus("Embed saved locally but failed to reach server", "warning");
+    return;
+  }
   setStatus("Updated broadcast embed.", "success");
 }
 
 async function fetchServerConfig() {
   try {
     const res = await fetch(apiUrl("/api/config"));
+    if (!res.ok) return;
     const data = (await res.json()) as { ok: boolean; youtubeUrl: string };
     if (data.ok && data.youtubeUrl && !data.youtubeUrl.includes("YOUR_CHANNEL_ID")) {
       state.youtubeUrl = data.youtubeUrl;
@@ -4823,6 +4863,7 @@ async function fetchServerConfig() {
     }
   } catch {}
 }
+
 
 function bindClick(id: string, handler: () => void | Promise<void>) {
   const element = document.getElementById(id);
@@ -4960,13 +5001,21 @@ function broadcastMediaMarkup() {
       </div>
     `;
   }
+  // Always use youtube-nocookie.com — avoids cookie/bot-check issues with cross-site
+  // tracking restrictions in Safari and Chrome. Upgrade any stored youtube.com URL here
+  // so existing Supabase entries benefit without needing a re-save.
+  const embedSrc = state.youtubeUrl.replace(
+    /https?:\/\/(www\.)?youtube\.com\/embed\//,
+    "https://www.youtube-nocookie.com/embed/",
+  );
   return `
     <iframe
       id="youtube-embed"
-      src="${escapeHtml(state.youtubeUrl)}"
+      src="${escapeHtml(embedSrc)}"
       title="Live stream"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; storage-access"
       allowfullscreen
+      referrerpolicy="strict-origin-when-cross-origin"
     ></iframe>
   `;
 }

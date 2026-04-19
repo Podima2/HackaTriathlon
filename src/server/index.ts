@@ -787,14 +787,22 @@ const server = createServer(async (req, res) => {
         functionName: "takePosition",
         args: [BigInt(Math.trunc(body.marketId)), body.isYes, collateralIn],
       });
-      await recordSpectatorTrade({
-        kind: "threshold",
-        marketId: Math.trunc(body.marketId),
-        side: body.isYes ? "Yes" : "No",
-        amount: collateralIn,
-        account: spectator.walletAddress,
-        txHash,
-      });
+      // Respond immediately so client can show the tx link; record in background.
+      void (async () => {
+        try {
+          await publicClient.waitForTransactionReceipt({ hash: txHash });
+          await recordSpectatorTrade({
+            kind: "threshold",
+            marketId: Math.trunc(body.marketId),
+            side: body.isYes ? "Yes" : "No",
+            amount: collateralIn,
+            account: spectator.walletAddress,
+            txHash,
+          });
+        } catch (err) {
+          console.error("[spectator] threshold trade receipt/record failed:", err);
+        }
+      })();
       return sendJson(res, 200, {
         ok: true,
         txHash,
@@ -830,14 +838,22 @@ const server = createServer(async (req, res) => {
         functionName: "takePosition",
         args: [BigInt(Math.trunc(body.marketId)), body.isAbove, collateralIn],
       });
-      await recordSpectatorTrade({
-        kind: "interval",
-        marketId: Math.trunc(body.marketId),
-        side: body.isAbove ? "Above" : "Below",
-        amount: collateralIn,
-        account: spectator.walletAddress,
-        txHash,
-      });
+      // Respond immediately so client can show the tx link; record in background.
+      void (async () => {
+        try {
+          await publicClient.waitForTransactionReceipt({ hash: txHash });
+          await recordSpectatorTrade({
+            kind: "interval",
+            marketId: Math.trunc(body.marketId),
+            side: body.isAbove ? "Above" : "Below",
+            amount: collateralIn,
+            account: spectator.walletAddress,
+            txHash,
+          });
+        } catch (err) {
+          console.error("[spectator] interval trade receipt/record failed:", err);
+        }
+      })();
       return sendJson(res, 200, {
         ok: true,
         txHash,
@@ -3566,7 +3582,7 @@ async function executeSpectatorContract(spectator: SpectatorRecord, request: {
     functionName: request.functionName as never,
     args: request.args as never,
   });
-  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  // Return the hash immediately — the caller is responsible for waiting on-chain.
   return txHash;
 }
 
