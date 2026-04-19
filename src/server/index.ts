@@ -1010,6 +1010,28 @@ const server = createServer(async (req, res) => {
       .sort((left, right) => (
         left.windowStartElapsedMs - right.windowStartElapsedMs || left.marketId - right.marketId
       ));
+    if (url.searchParams.has("debug")) {
+      try {
+        const current = await loadIntervalAutomationSessionDataAsync();
+        const account = faucetPrivateKey ? privateKeyToAccount(normalizePrivateKey(faucetPrivateKey)).address : null;
+        const specs = current ? buildVisibleIntervalSpecs(current.session, current.samples, "hr", 1) : [];
+        return sendJson(res, 200, {
+          markets,
+          debug: {
+            enableIntervalAutomation,
+            contractAddress: parimutuelIntervalMarketAddress || null,
+            operatorAddress: account,
+            hasFaucetKey: Boolean(faucetPrivateKey),
+            session: current ? { sessionId: current.session.sessionId, sampleCount: current.samples.length, lastElapsedMs: current.session.lastElapsedMs } : null,
+            registeredMarkets: Object.keys(loadIntervalMarketRegistry()).length,
+            hrSpecs: specs.map((s) => ({ start: s.startElapsedMs, end: s.endElapsedMs, ref: s.referenceValue, openMs: s.endAt.getTime() - Date.now() })),
+            nowMs: Date.now(),
+          },
+        });
+      } catch (err) {
+        return sendJson(res, 200, { markets, debugError: err instanceof Error ? err.message : String(err) });
+      }
+    }
     return sendJson(res, 200, { markets });
   }
 
